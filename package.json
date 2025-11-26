@@ -1,12 +1,6 @@
 {
   "name": "@allegro/codemirror-lang-opel",
-  "version": "0.1.0-beta.1",
   "description": "OPEL language support for CodeMirror",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/allegro/codemirror-lang-opel"
-  },
-  "homepage": "https://github.com/allegro/codemirror-lang-opel",
   "keywords": [
     "codemirror",
     "opel",
@@ -15,8 +9,10 @@
     "autocomplete"
   ],
   "scripts": {
-    "build": "exit 0",
-    "prepare": "exit 0"
+    "test": "vitest",
+    "build": "lezer-generator src/opel.grammar --typeScript -o src/parser && rollup -c",
+    "build-debug": "lezer-generator src/opel.grammar --names --typeScript -o src/parser && rollup -c",
+    "prepare": "npm run generate-parser && rollup -c"
   },
   "type": "module",
   "main": "dist/index.cjs",

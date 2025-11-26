@@ -9,7 +9,10 @@
     "highlight",
     "autocomplete"
   ],
-  "scripts": {},
+  "scripts": {
+    "build": "exit 0",
+    "prepare": "exit 0"
+  },
   "type": "module",
   "main": "dist/index.cjs",
   "module": "dist/index.js",

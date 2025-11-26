@@ -2,6 +2,11 @@
   "name": "@allegro/codemirror-lang-opel",
   "version": "0.1.0-beta.1",
   "description": "OPEL language support for CodeMirror",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/allegro/codemirror-lang-opel"
+  },
+  "homepage": "https://github.com/allegro/codemirror-lang-opel",
   "keywords": [
     "codemirror",
     "opel",

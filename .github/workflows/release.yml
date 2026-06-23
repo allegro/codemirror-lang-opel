@@ -23,14 +23,15 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm pkg delete scripts.prepare
-      - run: npm version $(echo $VERSION | head -n1 | cut -c2-) -no-git-tag-version -f
+      - run: npm version "${{ github.event.release.tag_name }}" --no-git-tag-version --allow-same-version
         env:
           VERSION: ${{ github.event.release.tag_name }}
       - name: Publish to npm
         run: |
-          VERSION=$(echo ${{ github.event.release.tag_name }} | cut -c2-)
-          if [[ $VERSION =~ alpha|beta|rc ]]; then
+          if [[ "$VERSION" =~ -(alpha|beta|rc) ]]; then
             npm publish --access public --tag next
           else
             npm publish --access public
           fi
+        env:
+          VERSION: ${{ github.event.release.tag_name }}

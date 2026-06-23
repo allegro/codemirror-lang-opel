@@ -26,4 +26,11 @@ jobs:
       - run: npm version $(echo $VERSION | head -n1 | cut -c2-) -no-git-tag-version -f
         env:
           VERSION: ${{ github.event.release.tag_name }}
-      - run: npm publish --access public
+      - name: Publish to npm
+        run: |
+          VERSION=$(echo ${{ github.event.release.tag_name }} | cut -c2-)
+          if [[ $VERSION =~ alpha|beta|rc ]]; then
+            npm publish --access public --tag next
+          else
+            npm publish --access public
+          fi

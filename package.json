@@ -10,9 +10,17 @@
   ],
   "scripts": {
     "test": "vitest",
-    "build": "lezer-generator src/opel.grammar --typeScript -o src/parser && rollup -c",
-    "build-debug": "lezer-generator src/opel.grammar --names --typeScript -o src/parser && rollup -c",
-    "prepare": "npm run generate-parser && rollup -c"
+    "typecheck": "tsc --noEmit",
+    "generate-parser": "lezer-generator src/opel.grammar --typeScript -o src/parser",
+    "generate-parser-debug": "lezer-generator src/opel.grammar --names --typeScript -o src/parser",
+    "generate-parser:watch": "chokidar src/opel.grammar -c \"npm run generate-parser\"",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "storybook": "storybook dev -p 6006",
+    "dev": "npm run generate-parser && concurrently --names storybook,watcher \"npm run storybook\" \"npm run generate-parser:watch\"",
+    "build": "npm run generate-parser && npm run typecheck && rollup -c",
+    "build-debug": "npm run generate-parser-debug && npm run typecheck && rollup -c",
+    "prepare": "npm run build"
   },
   "type": "module",
   "main": "dist/index.cjs",
@@ -24,21 +32,29 @@
   "types": "dist/index.d.ts",
   "sideEffects": false,
   "dependencies": {
-    "@codemirror/autocomplete": "^6.19.1",
-    "@codemirror/language": "^6.0.0",
-    "@codemirror/lint": "^6.9.1",
-    "@codemirror/view": "^6.38.6",
+    "@codemirror/autocomplete": "^6.20.3",
+    "@codemirror/language": "^6.12.3",
+    "@codemirror/lint": "^6.9.7",
+    "@codemirror/view": "^6.43.1",
     "@lezer/highlight": "^1.0.0",
-    "@lezer/lr": "^1.0.0"
+    "@lezer/lr": "^1.4.10"
   },
   "devDependencies": {
+    "@codemirror/commands": "^6.10.3",
+    "@codemirror/state": "^6.6.0",
     "@lezer/generator": "^1.8.0",
     "@rollup/plugin-typescript": "^12.1.4",
+    "@storybook/addon-docs": "^10.4.6",
+    "@storybook/html-vite": "^10.4.6",
     "@types/node": "^24.1.0",
-    "rollup": "^4.45.1",
+    "chokidar-cli": "^3.0.0",
+    "concurrently": "^10.0.3",
+    "prettier": "^3.8.4",
+    "rollup": "^4.62.2",
+    "storybook": "^10.4.6",
     "tslib": "^2.8.1",
     "typescript": "^5.8.3",
-    "vitest": "^4.0.5"
+    "vitest": "^4.1.9"
   },
   "license": "Apache-2.0",
   "engines": {

@@ -2,15 +2,15 @@ name: Release
 
 on:
   release:
-    types: [ created ]
+    types: [created]
 
 permissions:
-  id-token: write  # Required for OIDC
+  id-token: write # Required for OIDC
   contents: read
 
 jobs:
   release:
-    runs-on: [ ubuntu-latest ]
+    runs-on: [ubuntu-latest]
 
     steps:
       - uses: actions/checkout@v4

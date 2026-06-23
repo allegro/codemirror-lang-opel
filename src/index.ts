@@ -8,8 +8,19 @@ import {
   LRLanguage,
   LanguageSupport,
 } from '@codemirror/language';
+import type { Extension } from '@codemirror/state';
 import { autocompletion } from '@codemirror/autocomplete';
 import { opelCompletions } from './opel-autocomplete';
+import { linter, lintGutter } from '@codemirror/lint';
+import { opelLinter } from './linter';
+export { opelLinter } from './linter';
+
+export interface OpelOptions {}
+
+export interface OpelExtensionsOptions extends OpelOptions {
+  enableLinter?: boolean;
+  includeLintGutter?: boolean;
+}
 
 /// A language provider based on the OPEL
 /// parser, extended with highlighting and indentation information.
@@ -47,7 +58,7 @@ export const opelLanguage = LRLanguage.define({
   languageData: {
     // OPEL doesn't have traditional comments but we can support them for developer notes
     commentTokens: { line: '//' },
-    // Indent trigger patterns for OPEL - expanded to include more cases
+    // Indent trigger patterns
     indentOnInput: /^\s*(?:else\b|val\b|\}|\]|\)|;)$/,
     // Auto-close brackets, braces, and quotes
     closeBrackets: {
@@ -66,12 +77,29 @@ export const opelLanguage = LRLanguage.define({
 });
 
 /// OPEL language support with optional configuration.
-export function opel(options: { builtinFunctions?: string[] } = {}) {
-  const { builtinFunctions = [] } = options;
-
+export function opel(options: OpelOptions = {}) {
   return new LanguageSupport(opelLanguage, [
     autocompletion({
-      override: [opelCompletions(builtinFunctions)],
+      override: [opelCompletions()],
     }),
   ]);
+}
+
+/// OPEL language and lint extensions configured from one shared options object.
+export function opelExtensions(
+  options: OpelExtensionsOptions = {}
+): Extension[] {
+  const { enableLinter = true, includeLintGutter = true } = options;
+
+  const extensions: Extension[] = [opel()];
+
+  if (enableLinter) {
+    if (includeLintGutter) {
+      extensions.push(lintGutter());
+    }
+
+    extensions.push(linter(opelLinter()));
+  }
+
+  return extensions;
 }

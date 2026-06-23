@@ -1,13 +1,10 @@
 import { syntaxTree } from '@codemirror/language';
 import { Diagnostic } from '@codemirror/lint';
 import { EditorView } from '@codemirror/view';
+import type { OpelOptions } from './index';
 
 /**
  * Find similar terms based on substring matching of the first 3 characters
- * @param term The term to find suggestions for
- * @param candidates List of possible suggestions
- * @param maxResults Maximum number of suggestions to return (default: 3)
- * @returns Array of similar terms
  */
 function findSimilarTerms(
   term: string,
@@ -24,11 +21,7 @@ function findSimilarTerms(
     .slice(0, maxResults);
 }
 
-export function opelLinter(
-  { builtinFunctions }: { builtinFunctions: string[] } = {
-    builtinFunctions: [],
-  }
-) {
+export function opelLinter(options: OpelOptions = {}) {
   return (view: EditorView) => {
     const diagnostics: Diagnostic[] = [];
     const doc = view.state.doc;
@@ -67,8 +60,20 @@ export function opelLinter(
           // Provide helpful error messages based on context
           let message = 'Syntax error';
 
+          // Check if error is at or near end of input with no value-returning expression
+          const isNearEnd = node.to >= doc.length - 1;
+          const isEmptyOrWhitespace = errorText.trim() === '';
+          if (
+            isNearEnd &&
+            isEmptyOrWhitespace &&
+            context.includes('val') &&
+            context.includes(';')
+          ) {
+            message =
+              'Unexpected end of input, no value-returning expression found';
+          }
           // Check for common syntax errors
-          if (context.includes('val') && !context.includes(';')) {
+          else if (context.includes('val') && !context.includes(';')) {
             message =
               'Variable declaration requires a semicolon at the end. Use: val name = value;';
           } else if (
@@ -99,79 +104,6 @@ export function opelLinter(
             severity: 'error',
             message,
           });
-          return;
-        }
-
-        case 'FunctionName': {
-          const functionName = doc.sliceString(node.from, node.to);
-          if (
-            !builtinFunctions.includes(functionName) &&
-            !declaredVariables.includes(functionName)
-          ) {
-            const availableFunctions = findSimilarTerms(
-              functionName,
-              builtinFunctions
-            );
-
-            let message = `Unknown function "${functionName}"`;
-            if (availableFunctions.length > 0) {
-              message += `. Did you mean: ${availableFunctions.join(', ')}?`;
-            }
-
-            diagnostics.push({
-              from: node.from,
-              to: node.to,
-              severity: 'error',
-              message,
-            });
-          }
-          return;
-        }
-
-        case 'MethodName': {
-          const methodName = doc.sliceString(node.from, node.to);
-          // Check against allowed methods
-          const allowedMethods = [
-            'format',
-            'hasNoFractionalPart',
-            'size',
-            'toString',
-            'replaceFirst',
-            'contains',
-            'length',
-            'addAll',
-            'startsWith',
-            'get',
-            'charAt',
-            'substring',
-            'trim',
-            'toLowerCase',
-            'toUpperCase',
-            'replace',
-            'split',
-            'join',
-            'filter',
-            'map',
-            'reduce',
-            'find',
-            'isEmpty',
-          ];
-
-          if (!allowedMethods.includes(methodName)) {
-            const suggestions = findSimilarTerms(methodName, allowedMethods);
-
-            let message = `Method "${methodName}" may not be available`;
-            if (suggestions.length > 0) {
-              message += `. Did you mean: ${suggestions.join(', ')}?`;
-            }
-
-            diagnostics.push({
-              from: node.from,
-              to: node.to,
-              severity: 'warning',
-              message,
-            });
-          }
           return;
         }
 

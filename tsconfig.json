@@ -6,9 +6,8 @@
     "newLine": "lf",
     "declaration": true,
     "moduleResolution": "node",
-    "declarationDir": "./dist"
+    "declarationDir": "./dist",
+    "types": ["node"]
   },
-  "include": [
-    "src/*.ts"
-  ]
+  "include": ["src/*.ts"]
 }

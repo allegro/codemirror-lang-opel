@@ -21,12 +21,29 @@ export const UndeclaredVariable: StoryObj = {
   }),
 };
 
+export const UsedBeforeDeclaration: StoryObj = {
+  name: 'Used Before Declaration',
+  ...createEditorStory({
+    doc: `val a = foo;
+val foo = 'bar';
+a`,
+  }),
+};
+
 export const DuplicateDeclaration: StoryObj = {
   name: 'Duplicate Declaration',
   ...createEditorStory({
     doc: `val x = 1;
 val x = 2;
 x`,
+  }),
+};
+
+export const EmptyObject: StoryObj = {
+  name: 'Empty Object (lint hint)',
+  ...createEditorStory({
+    doc: `val empty = {};
+empty`,
   }),
 };
 

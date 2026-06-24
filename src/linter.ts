@@ -25,31 +25,205 @@ export function opelLinter(options: OpelOptions = {}) {
   return (view: EditorView) => {
     const diagnostics: Diagnostic[] = [];
     const doc = view.state.doc;
-    const declaredVariables: string[] = [];
+    const seenVariables: string[] = [];
 
     const tree = syntaxTree(view.state);
+    const allDeclarationsByScope = new Map<number, Map<string, number[]>>();
+    type SyntaxNodeLike = {
+      from: number;
+      to: number;
+      getChild(type: string): SyntaxNodeLike | null;
+    };
 
-    // First pass: collect all declared variables
-    tree.cursor().iterate((node) => {
-      if (node.name === 'VariableName') {
-        const varName = doc.sliceString(node.from, node.to);
-        if (declaredVariables.includes(varName)) {
-          diagnostics.push({
-            from: node.from,
-            to: node.to,
-            severity: 'warning',
-            message: `Variable "${varName}" is already declared`,
-          });
-        } else {
-          declaredVariables.push(varName);
+    function isScopeNode(name: string): boolean {
+      return (
+        name === 'Program' ||
+        name === 'BlockExpression' ||
+        name === 'FunctionInstantiation'
+      );
+    }
+
+    function collectDeclarationName(
+      nodeName: string,
+      syntaxNode: SyntaxNodeLike
+    ): SyntaxNodeLike | null {
+      if (nodeName === 'Declaration') {
+        return syntaxNode.getChild('VariableName')?.getChild('Identifier') ?? null;
+      }
+      if (nodeName === 'SingleParam') {
+        return syntaxNode.getChild('Identifier');
+      }
+      return null;
+    }
+
+    function addDeclarationPosition(scopeId: number, name: string, position: number) {
+      let declarations = allDeclarationsByScope.get(scopeId);
+      if (!declarations) {
+        declarations = new Map<string, number[]>();
+        allDeclarationsByScope.set(scopeId, declarations);
+      }
+
+      const positions = declarations.get(name) ?? [];
+      positions.push(position);
+      declarations.set(name, positions);
+    }
+
+    // First pass: gather all declarations in each scope (independent of order).
+    let scanScopeId = 0;
+    const scanScopeStack: number[] = [];
+
+    tree.cursor().iterate(
+      (node) => {
+        if (isScopeNode(node.name)) {
+          const id = scanScopeId++;
+          allDeclarationsByScope.set(id, new Map());
+          scanScopeStack.push(id);
+        }
+
+        const scopeId = scanScopeStack[scanScopeStack.length - 1];
+        if (scopeId === undefined) {
+          return;
+        }
+
+        if (node.name === 'MultiParam') {
+          for (const param of node.node.getChildren('Identifier')) {
+            const paramName = doc.sliceString(param.from, param.to);
+            addDeclarationPosition(scopeId, paramName, param.from);
+          }
+          return;
+        }
+
+        if (node.name === 'Declaration' || node.name === 'SingleParam') {
+          const declarationNode = collectDeclarationName(node.name, node.node);
+          if (declarationNode) {
+            const declarationName = doc.sliceString(
+              declarationNode.from,
+              declarationNode.to
+            );
+            addDeclarationPosition(scopeId, declarationName, declarationNode.from);
+          }
+        }
+      },
+      (node) => {
+        if (isScopeNode(node.name)) {
+          scanScopeStack.pop();
         }
       }
-    });
+    );
 
-    // Second pass: check for errors
-    tree.cursor().iterate((node) => {
-      switch (node.name) {
-        case '⚠': {
+    type ActiveScope = { id: number; declared: Set<string> };
+    const scopeStack: ActiveScope[] = [];
+
+    function currentScope(): ActiveScope | undefined {
+      return scopeStack[scopeStack.length - 1];
+    }
+
+    function isDeclared(name: string): boolean {
+      for (let i = scopeStack.length - 1; i >= 0; i--) {
+        if (scopeStack[i].declared.has(name)) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    function hasDeclarationInAccessibleScopes(name: string): boolean {
+      for (let i = scopeStack.length - 1; i >= 0; i--) {
+        if (allDeclarationsByScope.get(scopeStack[i].id)?.has(name)) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    function declare(name: string, node: { from: number; to: number }) {
+      const scope = currentScope()?.declared;
+      if (!scope) {
+        return;
+      }
+      if (scope.has(name)) {
+        diagnostics.push({
+          from: node.from,
+          to: node.to,
+          severity: 'error',
+          message: `Variable "${name}" is already declared`,
+        });
+        return;
+      }
+
+      scope.add(name);
+      seenVariables.push(name);
+    }
+
+    let runtimeScopeId = 0;
+    tree.cursor().iterate(
+      (node) => {
+        if (isScopeNode(node.name)) {
+          scopeStack.push({ id: runtimeScopeId++, declared: new Set() });
+        }
+
+        if (node.name === 'Identifier') {
+          const identifierName = doc.sliceString(node.from, node.to);
+
+          // Skip reserved keywords and literals
+          if (['true', 'false', 'null'].includes(identifierName)) {
+            return;
+          }
+
+          // Check if identifier is in a context where it should be ignored
+          const parent = node.node.parent;
+          if (!parent) {
+            return;
+          }
+
+          const ignoredParents = [
+            'FunctionName',
+            'MethodName',
+            'FieldName',
+            'VariableName',
+            'FieldAccess',
+            'Declaration',
+            'LambdaParams',
+            'SingleParam',
+            'MultiParam',
+          ];
+
+          if (ignoredParents.includes(parent.name)) {
+            return;
+          }
+
+          // Check if it's accessing a property (obj.property)
+          const grandParent = parent.parent;
+          if (grandParent && grandParent.name === 'FieldAccess') {
+            return;
+          }
+
+          if (!isDeclared(identifierName)) {
+            let message = '';
+
+            if (hasDeclarationInAccessibleScopes(identifierName)) {
+              message = `Variable "${identifierName}" is used before declaration.`;
+            } else {
+              const similarVars = findSimilarTerms(identifierName, seenVariables);
+              message = `Variable "${identifierName}" is not declared.`;
+              if (similarVars.length > 0) {
+                message += ` Did you mean: ${similarVars.join(', ')}?`;
+              } else {
+                message += ` Declare it with: val ${identifierName} = value;`;
+              }
+            }
+
+            diagnostics.push({
+              from: node.from,
+              to: node.to,
+              severity: 'error',
+              message,
+            });
+          }
+          return;
+        }
+
+        if (node.name === '⚠') {
           // Parse error node
           const errorText = doc.sliceString(node.from, node.to);
           const context = doc.sliceString(
@@ -107,82 +281,56 @@ export function opelLinter(options: OpelOptions = {}) {
           return;
         }
 
-        case 'Identifier': {
-          const identifierName = doc.sliceString(node.from, node.to);
-
-          // Skip reserved keywords and literals
-          if (['true', 'false', 'null'].includes(identifierName)) {
-            return;
-          }
-
-          // Check if identifier is in a context where it should be ignored
-          const parent = node.node.parent;
-          if (!parent) {
-            return;
-          }
-
-          const ignoredParents = [
-            'FunctionName',
-            'MethodName',
-            'FieldName',
-            'VariableName',
-            'FieldAccess',
-            'Declaration',
-            'LambdaParams',
-            'SingleParam',
-            'MultiParam',
-          ];
-
-          if (ignoredParents.includes(parent.name)) {
-            return;
-          }
-
-          // Check if it's accessing a property (obj.property)
-          const grandParent = parent.parent;
-          if (grandParent && grandParent.name === 'FieldAccess') {
-            return;
-          }
-
-          // Check if variable is declared
-          if (!declaredVariables.includes(identifierName)) {
-            const similarVars = findSimilarTerms(
-              identifierName,
-              declaredVariables
+        return;
+      },
+      (node) => {
+        if (node.name === 'Declaration' || node.name === 'SingleParam') {
+          const declarationNode = collectDeclarationName(node.name, node.node);
+          if (declarationNode) {
+            declare(
+              doc.sliceString(declarationNode.from, declarationNode.to),
+              declarationNode
             );
-
-            let message = `Variable "${identifierName}" is not declared.`;
-            if (similarVars.length > 0) {
-              message += ` Did you mean: ${similarVars.join(', ')}?`;
-            } else {
-              message += ` Declare it with: val ${identifierName} = value;`;
-            }
-
-            diagnostics.push({
-              from: node.from,
-              to: node.to,
-              severity: 'error',
-              message,
-            });
           }
-          return;
+        } else if (node.name === 'MultiParam') {
+          for (const param of node.node.getChildren('Identifier')) {
+            declare(doc.sliceString(param.from, param.to), param);
+          }
         }
 
-        case 'Declaration': {
-          // Check if declaration is followed by a semicolon
-          const nextChar = doc.sliceString(node.to, node.to + 1);
-          if (nextChar !== ';' && nextChar !== '' && nextChar.trim() !== '') {
-            diagnostics.push({
-              from: node.to,
-              to: node.to,
-              severity: 'error',
-              message: 'Variable declaration must end with a semicolon (;)',
-            });
-          }
-          return;
+        if (isScopeNode(node.name)) {
+          scopeStack.pop();
         }
+      }
+    );
 
-        default:
-          return;
+    tree.cursor().iterate((node) => {
+      if (node.name === 'MapInstantiation') {
+        // An empty object must be declared as `{:}` in OPEL. A bare `{}`
+        // is rejected by the OPEL runtime, so flag it with a hint.
+        if (!node.node.getChild('Pairs')) {
+          diagnostics.push({
+            from: node.from,
+            to: node.to,
+            severity: 'error',
+            message:
+              'Empty object must be declared as {:} (a bare {} is not valid OPEL)',
+          });
+        }
+        return;
+      }
+
+      if (node.name === 'Declaration') {
+        // Check if declaration is followed by a semicolon
+        const nextChar = doc.sliceString(node.to, node.to + 1);
+        if (nextChar !== ';' && nextChar !== '' && nextChar.trim() !== '') {
+          diagnostics.push({
+            from: node.to,
+            to: node.to,
+            severity: 'error',
+            message: 'Variable declaration must end with a semicolon (;)',
+          });
+        }
       }
     });
 

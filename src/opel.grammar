@@ -176,11 +176,12 @@ ListInstantiation {
 }
 
 MapInstantiation {
-  LBrace Pairs RBrace
+  LBrace Pairs? RBrace
 }
 
 Pairs {
-  (Pair (Comma Pair)*)?
+  Pair (Comma Pair)* |
+  Colon
 }
 
 Pair {

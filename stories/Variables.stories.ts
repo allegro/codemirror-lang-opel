@@ -34,7 +34,7 @@ base - base * discount`,
 };
 
 export const DuplicateDeclaration: StoryObj = {
-  name: 'Duplicate Declaration (lint warning)',
+  name: 'Duplicate Declaration (lint error)',
   ...createEditorStory({
     doc: `val x = 1;
 val x = 2;

@@ -37,16 +37,23 @@
   "types": "dist/index.d.ts",
   "sideEffects": false,
   "dependencies": {
-    "@codemirror/autocomplete": "^6.20.3",
-    "@codemirror/language": "^6.12.3",
-    "@codemirror/lint": "^6.9.7",
-    "@codemirror/view": "^6.43.1",
     "@lezer/highlight": "^1.0.0",
     "@lezer/lr": "^1.4.10"
   },
+  "peerDependencies": {
+    "@codemirror/autocomplete": "^6.0.0",
+    "@codemirror/language": "^6.0.0",
+    "@codemirror/lint": "^6.0.0",
+    "@codemirror/state": "^6.0.0",
+    "@codemirror/view": "^6.0.0"
+  },
   "devDependencies": {
+    "@codemirror/autocomplete": "^6.20.3",
     "@codemirror/commands": "^6.10.3",
+    "@codemirror/language": "^6.12.3",
+    "@codemirror/lint": "^6.9.7",
     "@codemirror/state": "^6.6.0",
+    "@codemirror/view": "^6.43.1",
     "@lezer/generator": "^1.8.0",
     "@rollup/plugin-typescript": "^12.1.4",
     "@storybook/addon-docs": "^10.4.6",

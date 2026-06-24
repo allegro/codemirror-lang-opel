@@ -8,6 +8,11 @@
     "highlight",
     "autocomplete"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/allegro/codemirror-lang-opel"
+  },
+  "homepage": "https://github.com/allegro/codemirror-lang-opel",
   "scripts": {
     "test": "vitest",
     "typecheck": "tsc --noEmit",

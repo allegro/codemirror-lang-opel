@@ -2,12 +2,41 @@
 
 OPEL language support for CodeMirror — syntax highlighting, indentation, folding, autocomplete, and linting.
 
+## Installation
+
+```sh
+npm install @allegro/codemirror-lang-opel
+```
+
 ## Usage
+
+### Quick start
 
 ```ts
 import { opelExtensions } from '@allegro/codemirror-lang-opel';
 
 const extensions = opelExtensions();
+```
+
+### With `EditorView`
+
+```ts
+import { EditorState } from '@codemirror/state';
+import { EditorView } from '@codemirror/view';
+import { opelExtensions } from '@allegro/codemirror-lang-opel';
+
+const state = EditorState.create({
+  doc: 'if (true) { val x = 1 }',
+  extensions: opelExtensions({
+    enableLinter: true,
+    includeLintGutter: true,
+  }),
+});
+
+new EditorView({
+  state,
+  parent: document.querySelector('#editor')!,
+});
 ```
 
 ## Development

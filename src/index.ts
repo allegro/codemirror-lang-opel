@@ -56,8 +56,6 @@ export const opelLanguage = LRLanguage.define({
     ],
   }),
   languageData: {
-    // OPEL doesn't have traditional comments but we can support them for developer notes
-    commentTokens: { line: '//' },
     // Indent trigger patterns
     indentOnInput: /^\s*(?:else\b|val\b|\}|\]|\)|;)$/,
     // Auto-close brackets, braces, and quotes

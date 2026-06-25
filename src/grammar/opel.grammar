@@ -39,7 +39,7 @@ Expression {
 }
 
 IfExpression {
-  kw<"if"> LParen Expression RParen Expression (!else kw<"else"> Expression)?
+  kw<"if"> LParen Expression RParen Expression !else kw<"else"> Expression
 }
 
 OrExpression {
@@ -73,44 +73,35 @@ UnaryExpression {
 }
 
 Primary {
+  Atom |
+  Primary Postfix
+}
+
+Atom {
   FunctionInstantiation |
   NamedValue |
   Number |
   StringLiteral |
   ListInstantiation |
   MapInstantiation |
-  FunctionCall |
-  ParenthesizedExpression |
-  Primary Train
+  ParenthesizedExpression
 }
 
-Train {
-  (!fieldAccess (MethodCall | FieldAccess))+
+Postfix {
+  !fieldAccess (MethodCall | FieldAccess | CallGroup)
+}
+
+CallGroup {
+  !call LParen Args RParen
 }
 
 MethodCall {
-  Dot MethodName !call LParen Args RParen
-}
-
-MethodName {
-  Identifier
+  Dot Identifier !call LParen Args RParen
 }
 
 FieldAccess {
   LBracket Expression RBracket |
-  Dot FieldName
-}
-
-FieldName {
-  Identifier
-}
-
-FunctionCall {
-  FunctionName !call LParen Args RParen
-}
-
-FunctionName {
-  Identifier
+  Dot Identifier
 }
 
 ParenthesizedExpression {

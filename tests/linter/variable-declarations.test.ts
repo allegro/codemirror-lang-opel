@@ -22,6 +22,13 @@ describe('variable declaration order', () => {
     expect(diagnostics.filter((d) => d.message.includes('is not declared'))).toHaveLength(1);
   });
 
+  it('does not treat function call names as undeclared variables', () => {
+    const diagnostics = lint("identity('x')");
+    expect(
+      diagnostics.filter((d) => d.message.includes('identity') && d.message.includes('not declared'))
+    ).toHaveLength(0);
+  });
+
   it('reports duplicate declarations as errors', () => {
     const diagnostics = lint('val x = 1; val x = 2; x');
     const duplicates = diagnostics.filter((d) =>

@@ -74,6 +74,16 @@ function hasDeclarationInAccessibleScopes(
   return false;
 }
 
+function nextNonWhitespaceChar(source: string, start: number): string | null {
+  for (let i = start; i < source.length; i++) {
+    const char = source[i];
+    if (!/\s/.test(char)) {
+      return char;
+    }
+  }
+  return null;
+}
+
 export function opelLinter(options: OpelOptions = {}) {
   return (view: EditorView) => {
     const diagnostics: Diagnostic[] = [];
@@ -196,6 +206,13 @@ export function opelLinter(options: OpelOptions = {}) {
           ];
 
           if (ignoredParents.includes(parent.name)) {
+            return;
+          }
+
+          if (
+            parent.name === 'NamedValue' &&
+            nextNonWhitespaceChar(source, node.to) === '('
+          ) {
             return;
           }
 

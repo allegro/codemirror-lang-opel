@@ -15,7 +15,7 @@ const OPEL_KEYWORDS = [
  */
 export function opelCompletions() {
   return (context: CompletionContext): CompletionResult | null => {
-    const word = context.matchBefore(/\w*/);
+    const word = context.matchBefore(/[\w$]*/);
     if (!word || (word.from === word.to && !context.explicit)) {
       return null;
     }

@@ -1,5 +1,6 @@
 {
   "name": "@allegro/codemirror-lang-opel",
+  "version": "0.1.0-beta.1",
   "description": "OPEL language support for CodeMirror",
   "keywords": [
     "codemirror",
@@ -36,6 +37,9 @@
   },
   "types": "dist/index.d.ts",
   "sideEffects": false,
+  "files": [
+    "dist"
+  ],
   "dependencies": {
     "@lezer/highlight": "^1.0.0",
     "@lezer/lr": "^1.4.10"

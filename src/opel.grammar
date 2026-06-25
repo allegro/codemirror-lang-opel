@@ -6,8 +6,8 @@
   plus @left
   relational @left
   equality @left
-  and @left
-  or @left
+  logicalAnd @left
+  logicalOr @left
   lambda @right
   declaration @right
   else @right
@@ -43,11 +43,11 @@ IfExpression {
 }
 
 OrExpression {
-  AndExpression (!or (kw<"or"> | LogicalOr) AndExpression)*
+  AndExpression (!logicalOr LogicalOr AndExpression)*
 }
 
 AndExpression {
-  EqualityExpression (!and (kw<"and"> | LogicalAnd) EqualityExpression)*
+  EqualityExpression (!logicalAnd LogicalAnd EqualityExpression)*
 }
 
 EqualityExpression {

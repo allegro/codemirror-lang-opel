@@ -29,11 +29,7 @@ export const opelHighlighting = styleTags({
   SingleParam: t.variableName,
   MultiParam: t.variableName,
 
-  // OPEL Operators (word forms only - symbols are highlighted by default)
-  and: t.logicOperator,
-  or: t.logicOperator,
-
-  // Comparison operators
+  // OPEL logical and comparison operators
   LogicalOr: t.logicOperator,
   LogicalAnd: t.logicOperator,
   EqualityOp: t.compareOperator,

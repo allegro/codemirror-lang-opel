@@ -24,14 +24,14 @@ export const StringConcatenation: StoryObj = {
 export const Comparison: StoryObj = {
   name: 'Comparison',
   ...createEditorStory({
-    doc: '10 > 5 and 3 <= 4',
+    doc: '10 > 5 && 3 <= 4',
   }),
 };
 
 export const BooleanLiterals: StoryObj = {
   name: 'Boolean Literals',
   ...createEditorStory({
-    doc: 'true or false',
+    doc: 'true || false',
   }),
 };
 

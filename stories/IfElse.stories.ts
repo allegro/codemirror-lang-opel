@@ -33,7 +33,7 @@ export const BooleanCondition: StoryObj = {
   ...createEditorStory({
     doc: `val active = true;
 val verified = true;
-if (active and verified) "allowed" else "denied"`,
+if (active && verified) "allowed" else "denied"`,
   }),
 };
 

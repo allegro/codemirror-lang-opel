@@ -69,7 +69,7 @@ export const opelLanguage = LRLanguage.define({
     // Autocomplete configuration
     autocomplete: {
       // Complete keywords
-      keywords: ['val', 'if', 'else', 'true', 'false', 'null', 'and', 'or'],
+      keywords: ['val', 'if', 'else', 'true', 'false', 'null'],
     },
   },
 });

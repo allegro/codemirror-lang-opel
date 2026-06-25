@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { lint } from './test-utils';
+import { lint } from '../support/test-utils';
 
 describe('variable declaration order', () => {
   it('flags variables used before they are declared', () => {

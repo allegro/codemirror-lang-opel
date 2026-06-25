@@ -16,9 +16,9 @@
   "scripts": {
     "test": "vitest",
     "typecheck": "tsc --noEmit",
-    "generate-parser": "lezer-generator src/opel.grammar --typeScript -o src/parser",
-    "generate-parser-debug": "lezer-generator src/opel.grammar --names --typeScript -o src/parser",
-    "generate-parser:watch": "chokidar src/opel.grammar -c \"npm run generate-parser\"",
+    "generate-parser": "lezer-generator src/grammar/opel.grammar --typeScript -o src/generated/parser",
+    "generate-parser-debug": "lezer-generator src/grammar/opel.grammar --names --typeScript -o src/generated/parser",
+    "generate-parser:watch": "chokidar src/grammar/opel.grammar -c \"npm run generate-parser\"",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "storybook": "storybook dev -p 6006",

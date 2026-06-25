@@ -1,72 +1,89 @@
 import { syntaxTree } from '@codemirror/language';
-import { Diagnostic } from '@codemirror/lint';
+import type { Diagnostic } from '@codemirror/lint';
 import { EditorView } from '@codemirror/view';
-import type { OpelOptions } from './index';
+import type { OpelOptions } from '../types';
+import { analyzeDelimiters, unsupportedLogicalKeywordNear } from './delimiters';
+import { resolveParseErrorMessage } from './parse-error-message';
+import { findSimilarTerms } from './similar-terms';
 
-/**
- * Find similar terms based on substring matching of the first 3 characters
- */
-function findSimilarTerms(
-  term: string,
-  candidates: string[],
-  maxResults: number = 3
-): string[] {
-  if (term.length < 3) {
-    return [];
+type SyntaxNodeLike = {
+  from: number;
+  to: number;
+  getChild(type: string): SyntaxNodeLike | null;
+};
+
+type ActiveScope = { id: number; declared: Set<string> };
+
+function isScopeNode(name: string): boolean {
+  return (
+    name === 'Program' ||
+    name === 'BlockExpression' ||
+    name === 'FunctionInstantiation'
+  );
+}
+
+function collectDeclarationName(
+  nodeName: string,
+  syntaxNode: SyntaxNodeLike
+): SyntaxNodeLike | null {
+  if (nodeName === 'Declaration') {
+    return syntaxNode.getChild('VariableName')?.getChild('Identifier') ?? null;
+  }
+  if (nodeName === 'SingleParam') {
+    return syntaxNode.getChild('Identifier');
+  }
+  return null;
+}
+
+function addDeclarationPosition(
+  declarationsByScope: Map<number, Map<string, number[]>>,
+  scopeId: number,
+  name: string,
+  position: number
+) {
+  let declarations = declarationsByScope.get(scopeId);
+  if (!declarations) {
+    declarations = new Map<string, number[]>();
+    declarationsByScope.set(scopeId, declarations);
   }
 
-  const searchTerm = term.toLowerCase().substring(0, 3);
-  return candidates
-    .filter((candidate) => candidate.toLowerCase().includes(searchTerm))
-    .slice(0, maxResults);
+  const positions = declarations.get(name) ?? [];
+  positions.push(position);
+  declarations.set(name, positions);
+}
+
+function isDeclared(scopeStack: ActiveScope[], name: string): boolean {
+  for (let i = scopeStack.length - 1; i >= 0; i--) {
+    if (scopeStack[i].declared.has(name)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function hasDeclarationInAccessibleScopes(
+  declarationsByScope: Map<number, Map<string, number[]>>,
+  scopeStack: ActiveScope[],
+  name: string
+): boolean {
+  for (let i = scopeStack.length - 1; i >= 0; i--) {
+    if (declarationsByScope.get(scopeStack[i].id)?.has(name)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function opelLinter(options: OpelOptions = {}) {
   return (view: EditorView) => {
     const diagnostics: Diagnostic[] = [];
     const doc = view.state.doc;
+    const source = doc.toString();
+    const delimiterAnalysis = analyzeDelimiters(source);
     const seenVariables: string[] = [];
 
     const tree = syntaxTree(view.state);
     const allDeclarationsByScope = new Map<number, Map<string, number[]>>();
-    type SyntaxNodeLike = {
-      from: number;
-      to: number;
-      getChild(type: string): SyntaxNodeLike | null;
-    };
-
-    function isScopeNode(name: string): boolean {
-      return (
-        name === 'Program' ||
-        name === 'BlockExpression' ||
-        name === 'FunctionInstantiation'
-      );
-    }
-
-    function collectDeclarationName(
-      nodeName: string,
-      syntaxNode: SyntaxNodeLike
-    ): SyntaxNodeLike | null {
-      if (nodeName === 'Declaration') {
-        return syntaxNode.getChild('VariableName')?.getChild('Identifier') ?? null;
-      }
-      if (nodeName === 'SingleParam') {
-        return syntaxNode.getChild('Identifier');
-      }
-      return null;
-    }
-
-    function addDeclarationPosition(scopeId: number, name: string, position: number) {
-      let declarations = allDeclarationsByScope.get(scopeId);
-      if (!declarations) {
-        declarations = new Map<string, number[]>();
-        allDeclarationsByScope.set(scopeId, declarations);
-      }
-
-      const positions = declarations.get(name) ?? [];
-      positions.push(position);
-      declarations.set(name, positions);
-    }
 
     // First pass: gather all declarations in each scope (independent of order).
     let scanScopeId = 0;
@@ -88,7 +105,12 @@ export function opelLinter(options: OpelOptions = {}) {
         if (node.name === 'MultiParam') {
           for (const param of node.node.getChildren('Identifier')) {
             const paramName = doc.sliceString(param.from, param.to);
-            addDeclarationPosition(scopeId, paramName, param.from);
+            addDeclarationPosition(
+              allDeclarationsByScope,
+              scopeId,
+              paramName,
+              param.from
+            );
           }
           return;
         }
@@ -100,7 +122,12 @@ export function opelLinter(options: OpelOptions = {}) {
               declarationNode.from,
               declarationNode.to
             );
-            addDeclarationPosition(scopeId, declarationName, declarationNode.from);
+            addDeclarationPosition(
+              allDeclarationsByScope,
+              scopeId,
+              declarationName,
+              declarationNode.from
+            );
           }
         }
       },
@@ -111,29 +138,9 @@ export function opelLinter(options: OpelOptions = {}) {
       }
     );
 
-    type ActiveScope = { id: number; declared: Set<string> };
     const scopeStack: ActiveScope[] = [];
-
     function currentScope(): ActiveScope | undefined {
       return scopeStack[scopeStack.length - 1];
-    }
-
-    function isDeclared(name: string): boolean {
-      for (let i = scopeStack.length - 1; i >= 0; i--) {
-        if (scopeStack[i].declared.has(name)) {
-          return true;
-        }
-      }
-      return false;
-    }
-
-    function hasDeclarationInAccessibleScopes(name: string): boolean {
-      for (let i = scopeStack.length - 1; i >= 0; i--) {
-        if (allDeclarationsByScope.get(scopeStack[i].id)?.has(name)) {
-          return true;
-        }
-      }
-      return false;
     }
 
     function declare(name: string, node: { from: number; to: number }) {
@@ -198,10 +205,16 @@ export function opelLinter(options: OpelOptions = {}) {
             return;
           }
 
-          if (!isDeclared(identifierName)) {
+          if (!isDeclared(scopeStack, identifierName)) {
             let message = '';
 
-            if (hasDeclarationInAccessibleScopes(identifierName)) {
+            if (
+              hasDeclarationInAccessibleScopes(
+                allDeclarationsByScope,
+                scopeStack,
+                identifierName
+              )
+            ) {
               message = `Variable "${identifierName}" is used before declaration.`;
             } else {
               const similarVars = findSimilarTerms(identifierName, seenVariables);
@@ -224,53 +237,29 @@ export function opelLinter(options: OpelOptions = {}) {
         }
 
         if (node.name === '⚠') {
-          // Parse error node
           const errorText = doc.sliceString(node.from, node.to);
           const context = doc.sliceString(
             Math.max(0, node.from - 20),
             Math.min(doc.length, node.to + 20)
           );
-
-          // Provide helpful error messages based on context
-          let message = 'Syntax error';
-
-          // Check if error is at or near end of input with no value-returning expression
+          const logicalKeyword = unsupportedLogicalKeywordNear(
+            source,
+            node.from,
+            node.to
+          );
           const isNearEnd = node.to >= doc.length - 1;
           const isEmptyOrWhitespace = errorText.trim() === '';
-          if (
-            isNearEnd &&
-            isEmptyOrWhitespace &&
-            context.includes('val') &&
-            context.includes(';')
-          ) {
-            message =
-              'Unexpected end of input, no value-returning expression found';
-          }
-          // Check for common syntax errors
-          else if (context.includes('val') && !context.includes(';')) {
-            message =
-              'Variable declaration requires a semicolon at the end. Use: val name = value;';
-          } else if (
-            errorText === ')' ||
-            (context.includes('LParen') && !context.includes('RParen'))
-          ) {
-            message =
-              'Unclosed parenthesis. Make sure all opening parentheses have matching closing ones';
-          } else if (
-            errorText === ']' ||
-            (context.includes('LBracket') && !context.includes('RBracket'))
-          ) {
-            message =
-              'Unclosed bracket. Make sure all opening brackets have matching closing ones';
-          } else if (
-            errorText === '}' ||
-            (context.includes('LBrace') && !context.includes('RBrace'))
-          ) {
-            message =
-              'Unclosed brace. Make sure all opening braces have matching closing ones';
-          } else {
-            message = `Unexpected "${errorText}". Please check your syntax`;
-          }
+
+          const message = resolveParseErrorMessage({
+            errorText,
+            context,
+            isNearEnd,
+            isEmptyOrWhitespace,
+            delimiterAnalysis,
+            logicalKeyword,
+            nodeFrom: node.from,
+            nodeTo: node.to,
+          });
 
           diagnostics.push({
             from: node.from,
@@ -278,10 +267,7 @@ export function opelLinter(options: OpelOptions = {}) {
             severity: 'error',
             message,
           });
-          return;
         }
-
-        return;
       },
       (node) => {
         if (node.name === 'Declaration' || node.name === 'SingleParam') {

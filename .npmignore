@@ -1,6 +1,6 @@
 /src
-/test
-/stories
+/tests
+/examples
 /.storybook
 /node_modules
 rollup.config.js

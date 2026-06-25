@@ -1,7 +1,7 @@
 import type { StorybookConfig } from '@storybook/html-vite';
 
 const config: StorybookConfig = {
-  stories: ['../stories/**/*.stories.ts'],
+  stories: ['../examples/storybook/stories/**/*.stories.ts'],
   addons: ['@storybook/addon-docs'],
   docs: {
     autodocs: 'tag',

@@ -53,9 +53,9 @@ npm run dev
 
 This command:
 
-1. Regenerates the Lezer parser from `src/opel.grammar` once at startup.
+1. Regenerates the Lezer parser from `src/grammar/opel.grammar` once at startup.
 2. Starts Storybook at [http://localhost:6006](http://localhost:6006) for an interactive playground.
-3. Watches `src/opel.grammar` — any grammar change automatically reruns `generate-parser`, which Vite hot-reloads into the running stories.
+3. Watches `src/grammar/opel.grammar` — any grammar change automatically reruns `generate-parser`, which Vite hot-reloads into the running stories.
 
 ### Grammar-only watcher
 
@@ -73,7 +73,7 @@ Runs parser generation, TypeScript type-check, and Rollup bundling. Output goes 
 
 ### Stories
 
-Stories live in `stories/` and import directly from `src/`, so parser changes are immediately reflected without a separate build step.
+Stories live in `examples/storybook/stories/` and import directly from `src/`, so parser changes are immediately reflected without a separate build step.
 Each story category file also generates its own Docs page (`autodocs`), so `OPEL/Basic Expressions`, `OPEL/If Else`, etc. have separate category-level documentation.
 
 | Story group           | What it shows                                 |

@@ -254,6 +254,6 @@ kw<term> { @specialize[@name={term}]<identifier, term> }
   @precedence { Arrow, GreaterThanOrEqual, GreaterThan, LessThanOrEqual, LessThan, EqualityOp, InequalityOp, LogicalOr, LogicalAnd, Assign }
 }
 
-@external propSource opelHighlighting from "./highlight"
+@external propSource opelHighlighting from "../language/highlight"
 
 @detectDelim

@@ -1,7 +1,7 @@
 import { EditorState } from '@codemirror/state';
 import type { EditorView } from '@codemirror/view';
-import { opelLanguage } from './index';
-import { opelLinter } from './linter';
+import { opelLanguage } from '../../src/language';
+import { opelLinter } from '../../src/linter';
 
 export function hasParseError(code: string): boolean {
   const tree = opelLanguage.parser.parse(code);

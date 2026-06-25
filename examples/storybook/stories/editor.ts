@@ -10,7 +10,7 @@ import {
 import { syntaxHighlighting, defaultHighlightStyle, bracketMatching } from '@codemirror/language';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { tooltips } from '@codemirror/view';
-import { opel, opelExtensions } from '../src/index';
+import { opel, opelExtensions } from '../../../src';
 
 export interface EditorConfig {
   /** Initial document content shown in the editor. */

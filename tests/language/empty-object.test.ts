@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { hasParseError, lint } from './test-utils';
+import { hasParseError, lint } from '../support/test-utils';
 
 describe('empty object syntax', () => {
   it('parses {:} as a valid empty object', () => {

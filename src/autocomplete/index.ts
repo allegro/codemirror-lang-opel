@@ -1,14 +1,6 @@
 import { syntaxTree } from '@codemirror/language';
 import { CompletionContext, CompletionResult } from '@codemirror/autocomplete';
-
-const OPEL_KEYWORDS = [
-  { label: 'val', type: 'keyword', detail: 'variable declaration' },
-  { label: 'if', type: 'keyword', detail: 'conditional expression' },
-  { label: 'else', type: 'keyword', detail: 'alternative branch' },
-  { label: 'true', type: 'keyword', detail: 'boolean literal' },
-  { label: 'false', type: 'keyword', detail: 'boolean literal' },
-  { label: 'null', type: 'keyword', detail: 'null literal' },
-];
+import { OPEL_KEYWORD_COMPLETIONS } from '../syntax/constants';
 
 /**
  * Creates an autocomplete extension for OPEL
@@ -55,7 +47,7 @@ export function opelCompletions() {
     // Default: suggest keywords and variables
     return {
       from: word.from,
-      options: [...OPEL_KEYWORDS, ...variableCompletions],
+      options: [...OPEL_KEYWORD_COMPLETIONS, ...variableCompletions],
     };
   };
 }

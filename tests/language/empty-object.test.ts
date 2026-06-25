@@ -10,8 +10,8 @@ describe('empty object syntax', () => {
     expect(hasParseError('{a: 1, b: 2}')).toBe(false);
   });
 
-  it('parses a bare {} without a parse error (handled by the linter)', () => {
-    expect(hasParseError('{}')).toBe(false);
+  it('does not parse a bare {} (runtime-compatible)', () => {
+    expect(hasParseError('{}')).toBe(true);
   });
 
   it('does not flag {:} in the linter', () => {
@@ -19,11 +19,15 @@ describe('empty object syntax', () => {
     expect(diagnostics).toHaveLength(0);
   });
 
-  it('flags a bare {} with a hint to use {:}', () => {
+  it('flags a bare {} as invalid syntax', () => {
     const diagnostics = lint('{}');
-    expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0].severity).toBe('error');
-    expect(diagnostics[0].message).toContain('{:}');
+    expect(diagnostics.some((d) => d.severity === 'error')).toBe(true);
+    expect(diagnostics.some((d) => d.message.includes('"{:}"'))).toBe(true);
+  });
+
+  it('flags {} inside surrounding code with the same hint', () => {
+    const diagnostics = lint('val empty = {};\nempty');
+    expect(diagnostics.some((d) => d.message.includes('"{:}"'))).toBe(true);
   });
 
   it('does not flag non-empty objects', () => {

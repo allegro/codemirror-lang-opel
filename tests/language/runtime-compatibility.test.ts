@@ -9,7 +9,7 @@ describe('runtime parser compatibility', () => {
       "(aMap.get)('get')",
       "({'get': x->x+x}.get)('get')",
       "(if (true) 'a' else 'b').length()",
-      "(if (x > 0) foo else bar)(x)",
+      '(if (x > 0) foo else bar)(x)',
     ];
 
     for (const expression of expressions) {
@@ -19,10 +19,5 @@ describe('runtime parser compatibility', () => {
 
   it('requires else branch in if expression (runtime-compatible)', () => {
     expect(hasParseError("if (2 == 2) 'elo'")).toBe(true);
-  });
-
-  it('keeps runtime-compatible empty map linting behavior', () => {
-    const diagnostics = lint('{}');
-    expect(diagnostics.some((d) => d.message.includes('{:}'))).toBe(true);
   });
 });

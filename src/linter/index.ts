@@ -308,21 +308,6 @@ export function opelLinter(options: OpelOptions = {}) {
     );
 
     tree.cursor().iterate((node) => {
-      if (node.name === 'MapInstantiation') {
-        // An empty object must be declared as `{:}` in OPEL. A bare `{}`
-        // is rejected by the OPEL runtime, so flag it with a hint.
-        if (!node.node.getChild('Pairs')) {
-          diagnostics.push({
-            from: node.from,
-            to: node.to,
-            severity: 'error',
-            message:
-              'Empty object must be declared as {:} (a bare {} is not valid OPEL)',
-          });
-        }
-        return;
-      }
-
       if (node.name === 'Declaration') {
         // Check whether declaration itself ends with a semicolon.
         const lastChar = doc.sliceString(node.to - 1, node.to);

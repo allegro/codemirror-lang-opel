@@ -167,7 +167,7 @@ ListInstantiation {
 }
 
 MapInstantiation {
-  LBrace Pairs? RBrace
+  LBrace Pairs RBrace
 }
 
 Pairs {
@@ -206,9 +206,9 @@ kw<term> { @specialize[@name={term}]<identifier, term> }
   
   @precedence { float, int, identifier }
   
-  singleQuoteString { "'" (![\\'] | "\\" _)* "'" }
+  singleQuoteString { "'" (![\\'\r\n] | "\\" _)* "'" }
   
-  doubleQuoteString { '"' (![\\"] | "\\" _)* '"' }
+  doubleQuoteString { '"' (![\\\"\r\n] | "\\" _)* '"' }
   
   LogicalOr { "||" }
   LogicalAnd { "&&" }

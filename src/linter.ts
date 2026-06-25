@@ -321,11 +321,11 @@ export function opelLinter(options: OpelOptions = {}) {
       }
 
       if (node.name === 'Declaration') {
-        // Check if declaration is followed by a semicolon
-        const nextChar = doc.sliceString(node.to, node.to + 1);
-        if (nextChar !== ';' && nextChar !== '' && nextChar.trim() !== '') {
+        // Check whether declaration itself ends with a semicolon.
+        const lastChar = doc.sliceString(node.to - 1, node.to);
+        if (lastChar !== ';') {
           diagnostics.push({
-            from: node.to,
+            from: Math.max(node.from, node.to - 1),
             to: node.to,
             severity: 'error',
             message: 'Variable declaration must end with a semicolon (;)',

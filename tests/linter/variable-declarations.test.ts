@@ -29,6 +29,13 @@ describe('variable declaration order', () => {
     ).toHaveLength(0);
   });
 
+  it('does not treat method call names on values as undeclared variables', () => {
+    const diagnostics = lint("['a', 2, 'c'].size()");
+    expect(
+      diagnostics.filter((d) => d.message.includes('size') && d.message.includes('not declared'))
+    ).toHaveLength(0);
+  });
+
   it('reports duplicate declarations as errors', () => {
     const diagnostics = lint('val x = 1; val x = 2; x');
     const duplicates = diagnostics.filter((d) =>

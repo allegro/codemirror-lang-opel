@@ -199,6 +199,7 @@ export function opelLinter(options: OpelOptions = {}) {
             'FieldName',
             'VariableName',
             'FieldAccess',
+            'MethodCall',
             'Declaration',
             'LambdaParams',
             'SingleParam',

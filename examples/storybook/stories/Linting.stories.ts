@@ -56,6 +56,13 @@ x + y`,
   }),
 };
 
+export const MethodCallOnValue: StoryObj = {
+  name: 'Method Call on Value',
+  ...createEditorStory({
+    doc: `['a', 2, 'c'].size()`,
+  }),
+};
+
 export const LinterDisabled: StoryObj = {
   name: 'Linter Disabled',
   ...createEditorStory({

@@ -1,5 +1,5 @@
 import { syntaxTree } from '@codemirror/language';
-import { CompletionContext, CompletionResult } from '@codemirror/autocomplete';
+import type { CompletionContext, CompletionResult } from '@codemirror/autocomplete';
 import { OPEL_KEYWORD_COMPLETIONS } from '../syntax/constants';
 
 /**
@@ -15,7 +15,7 @@ export function opelCompletions() {
     const tree = syntaxTree(context.state);
     const nodeBefore = tree.resolveInner(context.pos, -1);
 
-    // Get all declared variables in the current scope
+    // Get all declared variables from declarations in the document.
     const declaredVariables: string[] = [];
     tree.cursor().iterate((node) => {
       if (node.name === 'VariableName') {
@@ -34,7 +34,20 @@ export function opelCompletions() {
 
     // Check context to determine what to suggest
     const parent = nodeBefore.parent;
-    const isAfterDot = parent && parent.name === 'Train';
+    let charBeforeWord: string | null = null;
+    for (let i = word.from - 1; i >= 0; i--) {
+      const char = context.state.sliceDoc(i, i + 1);
+      if (!/\s/.test(char)) {
+        charBeforeWord = char;
+        break;
+      }
+    }
+    const isAfterDot =
+      charBeforeWord === '.' ||
+      nodeBefore.name === 'Dot' ||
+      parent?.name === 'Train' ||
+      parent?.name === 'FieldAccess' ||
+      parent?.name === 'MethodCall';
 
     if (isAfterDot) {
       // After a dot, suggest methods

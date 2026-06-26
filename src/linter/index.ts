@@ -1,6 +1,6 @@
 import { syntaxTree } from '@codemirror/language';
 import type { Diagnostic } from '@codemirror/lint';
-import { EditorView } from '@codemirror/view';
+import type { EditorView } from '@codemirror/view';
 import type { SyntaxNode, SyntaxNodeRef } from '@lezer/common';
 import type { OpelOptions } from '../types';
 import { analyzeDelimiters, unsupportedLogicalKeywordNear } from './delimiters';

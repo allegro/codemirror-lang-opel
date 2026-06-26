@@ -26,9 +26,9 @@ function hasUnexpectedCloseAtNode(
 }
 
 export function resolveParseErrorMessage(input: ParseErrorMessageInput): string {
- if (input.errorText === '}' && /\{\s*\}/.test(input.context)) {
-   return 'Empty objects must use "{:}" in OPEL.';
- }
+  if (input.errorText === '}' && /\{\s*\}/.test(input.context)) {
+    return 'Empty objects must use "{:}" in OPEL.';
+  }
 
   const unexpectedClose = input.delimiterAnalysis.unexpectedClose;
 

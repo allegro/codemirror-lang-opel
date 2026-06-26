@@ -1,19 +1,13 @@
 import { syntaxTree } from '@codemirror/language';
 import type { Diagnostic } from '@codemirror/lint';
 import { EditorView } from '@codemirror/view';
+import type { SyntaxNode, SyntaxNodeRef } from '@lezer/common';
 import type { OpelOptions } from '../types';
 import { analyzeDelimiters, unsupportedLogicalKeywordNear } from './delimiters';
 import { resolveParseErrorMessage } from './parse-error-message';
 import { findSimilarTerms } from './similar-terms';
 
-type SyntaxNodeLike = {
-  from: number;
-  to: number;
-  getChild(type: string): SyntaxNodeLike | null;
-};
-
 type ActiveScope = { id: number; declared: Set<string> };
-type AncestorNodeLike = SyntaxNodeLike & { parent: AncestorNodeLike | null };
 
 function isScopeNode(name: string): boolean {
   return (
@@ -25,8 +19,8 @@ function isScopeNode(name: string): boolean {
 
 function collectDeclarationName(
   nodeName: string,
-  syntaxNode: SyntaxNodeLike
-): SyntaxNodeLike | null {
+  syntaxNode: SyntaxNode
+): SyntaxNode | null {
   if (nodeName === 'Declaration') {
     return syntaxNode.getChild('VariableName')?.getChild('Identifier') ?? null;
   }
@@ -85,8 +79,8 @@ function nextNonWhitespaceChar(source: string, start: number): string | null {
   return null;
 }
 
-function isInsideNode(node: SyntaxNodeLike, type: string): boolean {
-  let current = node as AncestorNodeLike | null;
+function isInsideNode(node: SyntaxNodeRef, type: string): boolean {
+  let current = node.node as SyntaxNode | null;
   while (current) {
     if (current.parent?.name === type) {
       return true;

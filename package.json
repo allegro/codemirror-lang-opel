@@ -15,7 +15,7 @@
   },
   "homepage": "https://github.com/allegro/codemirror-lang-opel",
   "scripts": {
-    "test": "vitest",
+    "test": "vitest --run",
     "typecheck": "tsc --noEmit",
     "generate-parser": "mkdir -p src/generated && lezer-generator src/grammar/opel.grammar --typeScript -o src/generated/parser",
     "generate-parser-debug": "mkdir -p src/generated && lezer-generator src/grammar/opel.grammar --names --typeScript -o src/generated/parser",
@@ -26,6 +26,7 @@
     "dev": "npm run generate-parser && concurrently --names storybook,watcher \"npm run storybook\" \"npm run generate-parser:watch\"",
     "build": "npm run generate-parser && npm run typecheck && rollup -c",
     "build-debug": "npm run generate-parser-debug && npm run typecheck && rollup -c",
+    "smoke:package": "node tests/smoke/run.mjs",
     "prepare": "npm run build"
   },
   "type": "module",

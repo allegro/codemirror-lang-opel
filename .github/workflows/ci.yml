@@ -20,36 +20,7 @@ jobs:
 
       - run: npm ci --ignore-scripts
       - run: npm run build
-      - run: npm test -- --run
-
-      - name: Pack package
-        id: pack
-        run: echo "tarball=$(npm pack --ignore-scripts --silent)" >> "$GITHUB_OUTPUT"
+      - run: npm test
 
       - name: Smoke test packaged artifact
-        run: |
-          tmpdir="$(mktemp -d)"
-          trap 'rm -rf "$tmpdir"' EXIT
-
-          pushd "$tmpdir" >/dev/null
-          npm init -y >/dev/null
-          npm install --ignore-scripts \
-            "$GITHUB_WORKSPACE/${{ steps.pack.outputs.tarball }}" \
-            @codemirror/autocomplete@^6.20.3 \
-            @codemirror/language@^6.12.3 \
-            @codemirror/lint@^6.9.7 \
-            @codemirror/state@^6.6.0 \
-            @codemirror/view@^6.43.1 \
-            @lezer/highlight@^1.0.0 \
-            @lezer/lr@^1.4.10 >/dev/null
-
-          node --input-type=module <<'EOF'
-          import { opel, opelLanguage, opelExtensions, opelLinter } from '@allegro/codemirror-lang-opel';
-
-          if (typeof opel !== 'function') throw new Error('opel export is not callable');
-          if (typeof opelLanguage !== 'object') throw new Error('opelLanguage export is not available');
-          if (typeof opelExtensions !== 'function') throw new Error('opelExtensions export is not callable');
-          if (typeof opelLinter !== 'function') throw new Error('opelLinter export is not callable');
-          EOF
-
-          popd >/dev/null
+        run: npm run smoke:package

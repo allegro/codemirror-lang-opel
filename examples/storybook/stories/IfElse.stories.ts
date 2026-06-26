@@ -44,3 +44,11 @@ export const NullGuard: StoryObj = {
 if (input == null) "default" else input`,
   }),
 };
+
+export const MissingElse: StoryObj = {
+  name: 'Missing Else (lint error)',
+  ...createEditorStory({
+    doc: `val status = 'draft';
+if (status == 'published') 'live'`,
+  }),
+};

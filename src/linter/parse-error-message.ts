@@ -7,6 +7,7 @@ type ParseErrorMessageInput = {
   context: string;
   isNearEnd: boolean;
   isEmptyOrWhitespace: boolean;
+  isMissingElseBranch: boolean;
   delimiterAnalysis: DelimiterAnalysis;
   logicalKeyword: UnsupportedLogicalKeyword | null;
   nodeFrom: number;
@@ -25,9 +26,9 @@ function hasUnexpectedCloseAtNode(
 }
 
 export function resolveParseErrorMessage(input: ParseErrorMessageInput): string {
-  if (input.errorText === '}' && /\{\s*\}/.test(input.context)) {
-    return 'Empty objects must use "{:}" in OPEL.';
-  }
+ if (input.errorText === '}' && /\{\s*\}/.test(input.context)) {
+   return 'Empty objects must use "{:}" in OPEL.';
+ }
 
   const unexpectedClose = input.delimiterAnalysis.unexpectedClose;
 
@@ -44,6 +45,10 @@ export function resolveParseErrorMessage(input: ParseErrorMessageInput): string 
     const expectedClose = OPEN_TO_CLOSE[lastUnclosed.open];
     const delimiterName = DELIMITER_NAME[lastUnclosed.open];
     return `Unclosed ${delimiterName}. Missing "${expectedClose}".`;
+  }
+
+  if (input.isMissingElseBranch) {
+    return 'If expression requires an else branch. Add "else <expression>".';
   }
 
   if (input.logicalKeyword) {

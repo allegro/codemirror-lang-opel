@@ -13,6 +13,7 @@ type SyntaxNodeLike = {
 };
 
 type ActiveScope = { id: number; declared: Set<string> };
+type AncestorNodeLike = SyntaxNodeLike & { parent: AncestorNodeLike | null };
 
 function isScopeNode(name: string): boolean {
   return (
@@ -82,6 +83,17 @@ function nextNonWhitespaceChar(source: string, start: number): string | null {
     }
   }
   return null;
+}
+
+function isInsideNode(node: SyntaxNodeLike, type: string): boolean {
+  let current = node as AncestorNodeLike | null;
+  while (current) {
+    if (current.parent?.name === type) {
+      return true;
+    }
+    current = current.parent;
+  }
+  return false;
 }
 
 export function opelLinter(options: OpelOptions = {}) {
@@ -273,6 +285,8 @@ export function opelLinter(options: OpelOptions = {}) {
             context,
             isNearEnd,
             isEmptyOrWhitespace,
+            isMissingElseBranch:
+              isNearEnd && isEmptyOrWhitespace && isInsideNode(node.node, 'IfExpression'),
             delimiterAnalysis,
             logicalKeyword,
             nodeFrom: node.from,

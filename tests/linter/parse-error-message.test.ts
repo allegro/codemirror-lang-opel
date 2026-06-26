@@ -14,6 +14,7 @@ describe('resolveParseErrorMessage', () => {
       context: "null or '1'",
       isNearEnd: false,
       isEmptyOrWhitespace: false,
+      isMissingElseBranch: false,
       delimiterAnalysis: noDelimiterIssues,
       logicalKeyword: 'or',
       nodeFrom: 8,
@@ -30,6 +31,7 @@ describe('resolveParseErrorMessage', () => {
       context: '(a + 1',
       isNearEnd: true,
       isEmptyOrWhitespace: true,
+      isMissingElseBranch: false,
       delimiterAnalysis: {
         unclosed: [{ open: '(', pos: 0 }],
         unexpectedClose: null,
@@ -41,5 +43,23 @@ describe('resolveParseErrorMessage', () => {
 
     expect(message).toContain('Unclosed parenthesis');
     expect(message).toContain('Missing ")"');
+  });
+
+  it('returns missing else message for incomplete if expressions', () => {
+    const message = resolveParseErrorMessage({
+      errorText: '',
+      isNearEnd: true,
+      isEmptyOrWhitespace: true,
+      isMissingElseBranch: true,
+      context: "val status = 'draft'; if (status == 'published') 'live'",
+      delimiterAnalysis: noDelimiterIssues,
+      logicalKeyword: null,
+      nodeFrom: 53,
+      nodeTo: 53,
+    });
+
+    expect(message).toBe(
+      'If expression requires an else branch. Add "else <expression>".'
+    );
   });
 });

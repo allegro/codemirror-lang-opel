@@ -7,9 +7,10 @@ import {
   keymap,
   lineNumbers,
 } from '@codemirror/view';
-import { syntaxHighlighting, defaultHighlightStyle, bracketMatching } from '@codemirror/language';
+import { bracketMatching } from '@codemirror/language';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { tooltips } from '@codemirror/view';
+import { vscodeDark } from '@uiw/codemirror-theme-vscode';
 import { opel, opelExtensions } from '../../../src';
 
 export interface EditorConfig {
@@ -53,13 +54,17 @@ export function createEditor({
 }: EditorConfig): HTMLElement {
   const container = document.createElement('div');
   container.style.cssText =
-    'height:320px;overflow:auto;border:1px solid #d0d7de;border-radius:6px;font-size:14px;';
+    'min-height:320px;height:320px;overflow:auto;border:1px solid #d0d7de;border-radius:6px;font-size:14px;';
 
   const extensions: Extension[] = [
+    vscodeDark,
+    EditorView.theme({
+      '&': { height: '100%' },
+      '.cm-scroller': { overflow: 'auto' },
+    }),
     lineNumbers(),
     highlightActiveLine(),
     drawSelection(),
-    syntaxHighlighting(defaultHighlightStyle),
     bracketMatching(),
     history(),
     keymap.of([...defaultKeymap, ...historyKeymap]),

@@ -64,6 +64,7 @@
     "@storybook/addon-docs": "^10.4.6",
     "@storybook/html-vite": "^10.4.6",
     "@types/node": "^24.1.0",
+    "@uiw/codemirror-theme-vscode": "^4.25.10",
     "chokidar-cli": "^3.0.0",
     "concurrently": "^10.0.3",
     "prettier": "^3.8.4",

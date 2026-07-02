@@ -18,12 +18,12 @@ export const opelHighlighting = styleTags({
   NamedValue: t.variableName,
   VariableName: t.definition(t.variableName), // Variable names in declarations
 
-  // OPEL Function-related - now with separate function name highlighting
+  // OPEL Function-related
+  'FunctionCall/Identifier': t.function(t.variableName),
+  'MethodCall/Identifier': t.function(t.propertyName),
+  'FieldAccess/Identifier': t.propertyName,
   FunctionCall: t.function(t.variableName),
-  FunctionName: t.function(t.name),
   MethodCall: t.function(t.variableName),
-  MethodName: t.function(t.propertyName),
-  FieldName: t.propertyName, // Field access like obj.field
   FunctionInstantiation: t.function(t.variableName),
   LambdaParams: t.variableName,
   SingleParam: t.variableName,

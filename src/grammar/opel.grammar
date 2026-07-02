@@ -83,6 +83,7 @@ Train {
 
 Atom {
   FunctionInstantiation |
+  FunctionCall |
   NamedValue |
   Number |
   StringLiteral |
@@ -93,6 +94,10 @@ Atom {
 
 Postfix {
   !fieldAccess (MethodCall | FieldAccess | CallGroup)
+}
+
+FunctionCall {
+  Identifier !call LParen Args RParen
 }
 
 CallGroup {

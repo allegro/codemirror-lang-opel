@@ -2,6 +2,7 @@ import { EditorState } from '@codemirror/state';
 import type { EditorView } from '@codemirror/view';
 import { opelLanguage } from '../../src/language';
 import { opelLinter } from '../../src/linter';
+import type { OpelOptions } from '../../src/types';
 
 export function hasParseError(code: string): boolean {
   const tree = opelLanguage.parser.parse(code);
@@ -16,12 +17,12 @@ export function hasParseError(code: string): boolean {
   return error;
 }
 
-export function lint(code: string) {
+export function lint(code: string, options: OpelOptions = {}) {
   const state = EditorState.create({
     doc: code,
     extensions: [opelLanguage],
   });
   // The linter only reads `view.state`, so a minimal stub avoids needing a DOM.
   const view = { state } as unknown as EditorView;
-  return opelLinter()(view);
+  return opelLinter(options)(view);
 }

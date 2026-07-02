@@ -91,6 +91,8 @@ function isInsideNode(node: SyntaxNodeRef, type: string): boolean {
 }
 
 export function opelLinter(options: OpelOptions = {}) {
+  const { warnOnLambdaDefinitions = true } = options;
+
   return (view: EditorView) => {
     const diagnostics: Diagnostic[] = [];
     const doc = view.state.doc;
@@ -292,6 +294,17 @@ export function opelLinter(options: OpelOptions = {}) {
             to: node.to,
             severity: 'error',
             message,
+          });
+          return;
+        }
+
+        if (node.name === 'FunctionInstantiation' && warnOnLambdaDefinitions) {
+          diagnostics.push({
+            from: node.from,
+            to: node.to,
+            severity: 'warning',
+            message:
+              'Lambda definition detected. Avoid lambda definitions if possible.',
           });
         }
       },

@@ -30,6 +30,7 @@ const state = EditorState.create({
   extensions: opelExtensions({
     enableLinter: true,
     includeLintGutter: true,
+    warnOnLambdaDefinitions: true,
   }),
 });
 
@@ -38,6 +39,12 @@ new EditorView({
   parent: document.querySelector('#editor')!,
 });
 ```
+
+Available options:
+
+- `enableLinter` (default: `true`)
+- `includeLintGutter` (default: `true`)
+- `warnOnLambdaDefinitions` (default: `true`) — emits a linter warning for each lambda definition.
 
 ## Development
 

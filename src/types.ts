@@ -1,4 +1,6 @@
-export interface OpelOptions {}
+export interface OpelOptions {
+  warnOnLambdaDefinitions?: boolean;
+}
 
 export interface OpelExtensionsOptions extends OpelOptions {
   enableLinter?: boolean;

@@ -30,6 +30,7 @@ describe('runtime parsing equivalents', () => {
       "{'x': 2, 'y':3 }",
       "val f = () -> 3; f()",
       "val square = x -> x * x; square(2)",
+      "val square = (x) -> x * x; square(2)",
       '(x, y) -> {x*x + y*y}(1, 2)',
       'val f = a -> { b -> {a*2+b} }; f(2)(3)',
       "(aMap.get)('get')",

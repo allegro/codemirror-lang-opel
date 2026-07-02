@@ -150,7 +150,9 @@ LambdaParams {
 }
 
 MultiParam {
-  LParen (Identifier (Comma Identifier)+ | "") RParen
+  LParen RParen |
+  LParen Identifier !lambda RParen |
+  LParen Identifier (Comma Identifier)+ RParen
 }
 
 SingleParam {

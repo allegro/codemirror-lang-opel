@@ -244,7 +244,10 @@ export function opelLinter(options: OpelOptions = {}) {
             ) {
               message = `Variable "${identifierName}" is used before declaration.`;
             } else {
-              const similarVars = findSimilarTerms(identifierName, seenVariables);
+              const similarVars = findSimilarTerms(
+                identifierName,
+                seenVariables
+              );
               message = `Variable "${identifierName}" is not declared.`;
               if (similarVars.length > 0) {
                 message += ` Did you mean: ${similarVars.join(', ')}?`;
@@ -283,7 +286,9 @@ export function opelLinter(options: OpelOptions = {}) {
             isNearEnd,
             isEmptyOrWhitespace,
             isMissingElseBranch:
-              isNearEnd && isEmptyOrWhitespace && isInsideNode(node.node, 'IfExpression'),
+              isNearEnd &&
+              isEmptyOrWhitespace &&
+              isInsideNode(node.node, 'IfExpression'),
             delimiterAnalysis,
             logicalKeyword,
             nodeFrom: node.from,

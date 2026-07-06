@@ -25,7 +25,9 @@ function hasUnexpectedCloseAtNode(
   );
 }
 
-export function resolveParseErrorMessage(input: ParseErrorMessageInput): string {
+export function resolveParseErrorMessage(
+  input: ParseErrorMessageInput
+): string {
   if (input.errorText === '}' && /\{\s*\}/.test(input.context)) {
     return 'Empty objects must use "{:}" in OPEL.';
   }
@@ -41,7 +43,9 @@ export function resolveParseErrorMessage(input: ParseErrorMessageInput): string 
 
   if (input.isNearEnd && input.delimiterAnalysis.unclosed.length > 0) {
     const lastUnclosed =
-      input.delimiterAnalysis.unclosed[input.delimiterAnalysis.unclosed.length - 1];
+      input.delimiterAnalysis.unclosed[
+        input.delimiterAnalysis.unclosed.length - 1
+      ];
     const expectedClose = OPEN_TO_CLOSE[lastUnclosed.open];
     const delimiterName = DELIMITER_NAME[lastUnclosed.open];
     return `Unclosed ${delimiterName}. Missing "${expectedClose}".`;

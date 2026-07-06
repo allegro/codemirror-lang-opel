@@ -20,7 +20,9 @@ us`);
 
     expect(result).not.toBeNull();
     expect(result?.options.some((option) => option.label === 'if')).toBe(true);
-    expect(result?.options.some((option) => option.label === 'user')).toBe(true);
+    expect(result?.options.some((option) => option.label === 'user')).toBe(
+      true
+    );
   });
 
   it('does not suggest global completions after dot access', () => {

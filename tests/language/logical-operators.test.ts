@@ -18,9 +18,9 @@ describe('logical operator syntax', () => {
         d.message.includes('Logical keyword "or" is not supported')
       )
     ).toBe(true);
-    expect(diagnostics.some((d) => d.message.includes('Use "||" instead'))).toBe(
-      true
-    );
+    expect(
+      diagnostics.some((d) => d.message.includes('Use "||" instead'))
+    ).toBe(true);
   });
 
   it('suggests symbolic operator when using "and"', () => {
@@ -30,8 +30,8 @@ describe('logical operator syntax', () => {
         d.message.includes('Logical keyword "and" is not supported')
       )
     ).toBe(true);
-    expect(diagnostics.some((d) => d.message.includes('Use "&&" instead'))).toBe(
-      true
-    );
+    expect(
+      diagnostics.some((d) => d.message.includes('Use "&&" instead'))
+    ).toBe(true);
   });
 });

@@ -1,5 +1,8 @@
 import { syntaxTree } from '@codemirror/language';
-import type { CompletionContext, CompletionResult } from '@codemirror/autocomplete';
+import type {
+  CompletionContext,
+  CompletionResult,
+} from '@codemirror/autocomplete';
 import { OPEL_KEYWORD_COMPLETIONS } from '../syntax/constants';
 
 /**

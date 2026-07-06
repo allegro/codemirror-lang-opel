@@ -4,8 +4,12 @@ import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import path from 'node:path';
 
-const tmpdir = mkdtempSync(path.join(os.tmpdir(), 'codemirror-lang-opel-smoke-'));
-const verifyScript = fileURLToPath(new URL('./verify-package.mjs', import.meta.url));
+const tmpdir = mkdtempSync(
+  path.join(os.tmpdir(), 'codemirror-lang-opel-smoke-')
+);
+const verifyScript = fileURLToPath(
+  new URL('./verify-package.mjs', import.meta.url)
+);
 const repoRoot = path.resolve(path.dirname(verifyScript), '..', '..');
 const tarball = path.join(tmpdir, 'package.tgz');
 

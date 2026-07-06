@@ -14,25 +14,34 @@ describe('variable declaration order', () => {
 
   it('allows variables after their declaration', () => {
     const diagnostics = lint("val foo = 'bar'; val a = foo; a");
-    expect(diagnostics.filter((d) => d.message.includes('is not declared'))).toHaveLength(0);
+    expect(
+      diagnostics.filter((d) => d.message.includes('is not declared'))
+    ).toHaveLength(0);
   });
 
   it('keeps "not declared" for truly missing variables', () => {
     const diagnostics = lint('missing + 1');
-    expect(diagnostics.filter((d) => d.message.includes('is not declared'))).toHaveLength(1);
+    expect(
+      diagnostics.filter((d) => d.message.includes('is not declared'))
+    ).toHaveLength(1);
   });
 
   it('does not treat function call names as undeclared variables', () => {
     const diagnostics = lint("identity('x')");
     expect(
-      diagnostics.filter((d) => d.message.includes('identity') && d.message.includes('not declared'))
+      diagnostics.filter(
+        (d) =>
+          d.message.includes('identity') && d.message.includes('not declared')
+      )
     ).toHaveLength(0);
   });
 
   it('does not treat method call names on values as undeclared variables', () => {
     const diagnostics = lint("['a', 2, 'c'].size()");
     expect(
-      diagnostics.filter((d) => d.message.includes('size') && d.message.includes('not declared'))
+      diagnostics.filter(
+        (d) => d.message.includes('size') && d.message.includes('not declared')
+      )
     ).toHaveLength(0);
   });
 

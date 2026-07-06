@@ -1,5 +1,10 @@
 import { EditorState } from '@codemirror/state';
-import { opel, opelLanguage, opelExtensions, opelLinter } from '@allegro/codemirror-lang-opel';
+import {
+  opel,
+  opelLanguage,
+  opelExtensions,
+  opelLinter,
+} from '@allegro/codemirror-lang-opel';
 
 if (typeof opel !== 'function') {
   throw new Error('opel export is not callable');
@@ -23,7 +28,7 @@ if (!Array.isArray(extensions) || extensions.length === 0) {
 }
 
 const state = EditorState.create({
-  doc: "val x = 1; x + 1",
+  doc: 'val x = 1; x + 1',
   extensions: [opelLanguage, ...extensions],
 });
 

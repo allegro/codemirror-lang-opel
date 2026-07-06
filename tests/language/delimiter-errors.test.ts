@@ -11,9 +11,9 @@ describe('delimiter parse errors', () => {
 
   it('reports unclosed bracket', () => {
     const diagnostics = lint('[1, 2');
-    expect(diagnostics.some((d) => d.message.includes('Unclosed bracket'))).toBe(
-      true
-    );
+    expect(
+      diagnostics.some((d) => d.message.includes('Unclosed bracket'))
+    ).toBe(true);
   });
 
   it('reports unclosed brace', () => {

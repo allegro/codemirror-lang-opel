@@ -91,7 +91,8 @@ function isInsideNode(node: SyntaxNodeRef, type: string): boolean {
 }
 
 export function opelLinter(options: OpelOptions = {}) {
-  const { warnOnLambdaDefinitions = true } = options;
+  const { warnOnLambdaDefinitions = true, runtimeGlobals = [] } = options;
+  const runtimeGlobalsSet = new Set(runtimeGlobals);
 
   return (view: EditorView) => {
     const diagnostics: Diagnostic[] = [];
@@ -192,6 +193,9 @@ export function opelLinter(options: OpelOptions = {}) {
 
           // Skip reserved keywords and literals
           if (['true', 'false', 'null'].includes(identifierName)) {
+            return;
+          }
+          if (runtimeGlobalsSet.has(identifierName)) {
             return;
           }
 

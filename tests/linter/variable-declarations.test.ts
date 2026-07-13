@@ -26,6 +26,15 @@ describe('variable declaration order', () => {
     ).toHaveLength(1);
   });
 
+  it('allows runtime globals passed in options', () => {
+    const diagnostics = lint('runtimeVar + 1', {
+      runtimeGlobals: ['runtimeVar'],
+    });
+    expect(
+      diagnostics.filter((d) => d.message.includes('runtimeVar'))
+    ).toHaveLength(0);
+  });
+
   it('does not treat function call names as undeclared variables', () => {
     const diagnostics = lint("identity('x')");
     expect(

@@ -18,6 +18,8 @@ export interface EditorConfig {
   doc: string;
   /** Whether to enable the OPEL linter (default: true). */
   enableLinter?: boolean;
+  /** Runtime globals to whitelist in the linter. */
+  runtimeGlobals?: readonly string[];
   /** Extra CodeMirror extensions to layer on top. */
   extraExtensions?: Extension[];
 }
@@ -32,11 +34,12 @@ function toTemplateLiteral(value: string): string {
 function createStorySource({
   doc,
   enableLinter = true,
+  runtimeGlobals = [],
 }: EditorConfig): string {
   if (enableLinter) {
     return `const opelCode = ${toTemplateLiteral(doc)};
 
-const extensions = opelExtensions();`;
+const extensions = opelExtensions(${runtimeGlobals.length > 0 ? `{ runtimeGlobals: ${JSON.stringify(runtimeGlobals)} }` : ''});`;
   }
 
   return `const opelCode = ${toTemplateLiteral(doc)};
@@ -50,6 +53,7 @@ const extensions = [
 export function createEditor({
   doc,
   enableLinter = true,
+  runtimeGlobals = [],
   extraExtensions = [],
 }: EditorConfig): HTMLElement {
   const container = document.createElement('div');
@@ -70,7 +74,7 @@ export function createEditor({
     keymap.of([...defaultKeymap, ...historyKeymap]),
     tooltips({ parent: document.body }),
     ...(enableLinter
-      ? opelExtensions({ enableLinter, includeLintGutter: true })
+      ? opelExtensions({ enableLinter, includeLintGutter: true, runtimeGlobals })
       : [opel()]),
     ...extraExtensions,
   ];

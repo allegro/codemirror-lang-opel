@@ -31,6 +31,7 @@ const state = EditorState.create({
     enableLinter: true,
     includeLintGutter: true,
     warnOnLambdaDefinitions: true,
+    runtimeGlobals: ['ctx', 'env'],
   }),
 });
 
@@ -45,6 +46,7 @@ Available options:
 - `enableLinter` (default: `true`)
 - `includeLintGutter` (default: `true`)
 - `warnOnLambdaDefinitions` (default: `true`) — emits a linter warning for each lambda definition.
+- `runtimeGlobals` (default: `[]`) — variable names treated as globally available at runtime, so linter does not report them as undeclared.
 
 ## Development
 

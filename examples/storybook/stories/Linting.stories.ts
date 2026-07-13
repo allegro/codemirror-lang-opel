@@ -21,6 +21,14 @@ export const UndeclaredVariable: StoryObj = {
   }),
 };
 
+export const RuntimeGlobals: StoryObj = {
+  name: 'Runtime Globals',
+  ...createEditorStory({
+    doc: `ctx + env`,
+    runtimeGlobals: ['ctx', 'env'],
+  }),
+};
+
 export const UsedBeforeDeclaration: StoryObj = {
   name: 'Used Before Declaration',
   ...createEditorStory({

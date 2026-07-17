@@ -1,5 +1,7 @@
 /src
-/test
+/tests
+/examples
+/.storybook
 /node_modules
 rollup.config.js
 tsconfig.json

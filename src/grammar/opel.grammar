@@ -1,0 +1,261 @@
+@precedence {
+  call @left
+  fieldAccess @left
+  unary @left
+  multiply @left
+  plus @left
+  relational @left
+  equality @left
+  logicalAnd @left
+  logicalOr @left
+  lambda @right
+  declaration @right
+  else @right
+}
+
+@top Program {
+  Body
+}
+
+Body {
+  Declarations? Expression Semicolon?
+}
+
+Declarations {
+  Declaration+
+}
+
+Declaration {
+  kw<"val"> VariableName !declaration Assign Expression Semicolon
+}
+
+VariableName {
+  Identifier
+}
+
+Expression {
+  IfExpression |
+  OrExpression
+}
+
+IfExpression {
+  kw<"if"> LParen Expression RParen Expression !else kw<"else"> Expression
+}
+
+OrExpression {
+  AndExpression (!logicalOr LogicalOr AndExpression)*
+}
+
+AndExpression {
+  EqualityExpression (!logicalAnd LogicalAnd EqualityExpression)*
+}
+
+EqualityExpression {
+  RelationalExpression (!equality (EqualityOp | InequalityOp) RelationalExpression)*
+}
+
+RelationalExpression {
+  AdditiveExpression (!relational (GreaterThan | GreaterThanOrEqual | LessThan | LessThanOrEqual) AdditiveExpression)*
+}
+
+AdditiveExpression {
+  MultiplyExpression (!plus (Plus | Minus) MultiplyExpression)*
+}
+
+MultiplyExpression {
+  UnaryExpression (!multiply (Multiply | Divide) UnaryExpression)*
+}
+
+UnaryExpression {
+  !unary Not UnaryExpression |
+  !unary Minus UnaryExpression |
+  Primary
+}
+
+Primary {
+  Atom |
+  Train
+}
+
+Train {
+  Primary Postfix
+}
+
+Atom {
+  FunctionInstantiation |
+  FunctionCall |
+  NamedValue |
+  Number |
+  StringLiteral |
+  ListInstantiation |
+  MapInstantiation |
+  ParenthesizedExpression
+}
+
+Postfix {
+  !fieldAccess (MethodCall | FieldAccess | CallGroup)
+}
+
+FunctionCall {
+  Identifier !call LParen Args RParen
+}
+
+CallGroup {
+  !call LParen Args RParen
+}
+
+MethodCall {
+  Dot Identifier !call LParen Args RParen
+}
+
+FieldAccess {
+  LBracket Expression RBracket |
+  Dot Identifier
+}
+
+ParenthesizedExpression {
+  LParen Expression RParen
+}
+
+Args {
+  (Expression (Comma Expression)*)?
+}
+
+NamedValue {
+  @specialize[@name=BooleanLiteral]<identifier, "true" | "false"> |
+  @specialize[@name=NullLiteral]<identifier, "null"> |
+  Identifier
+}
+
+StringLiteral {
+  singleQuoteString |
+  doubleQuoteString
+}
+
+Number {
+  FloatingPointLiteral |
+  IntegerLiteral
+}
+
+FloatingPointLiteral {
+  float
+}
+
+IntegerLiteral {
+  int
+}
+
+FunctionInstantiation {
+  LambdaParams !lambda Arrow FunctionBody
+}
+
+LambdaParams {
+  MultiParam |
+  SingleParam
+}
+
+MultiParam {
+  LParen RParen |
+  LParen Identifier !lambda RParen |
+  LParen Identifier (Comma Identifier)+ RParen
+}
+
+SingleParam {
+  Identifier
+}
+
+FunctionBody {
+  Expression |
+  BlockExpression
+}
+
+BlockExpression {
+  LBrace Body RBrace
+}
+
+ListInstantiation {
+  LBracket Args RBracket
+}
+
+MapInstantiation {
+  LBrace Pairs RBrace
+}
+
+Pairs {
+  Pair (Comma Pair)* |
+  Colon
+}
+
+Pair {
+  Primary Colon Expression
+}
+
+Identifier {
+  identifier
+}
+
+kw<term> { @specialize[@name={term}]<identifier, term> }
+
+@skip { whitespace }
+
+@tokens {
+  whitespace {
+    @whitespace+
+  }
+  
+  float {
+    @digit+ "." @digit+
+  }
+  
+  int {
+    @digit+
+  }
+  
+  identifier {
+    (@asciiLetter | "_" | "$") (@asciiLetter | @digit | "_" | "$")*
+  }
+  
+  @precedence { float, int, identifier }
+  
+  singleQuoteString { "'" (![\\'\r\n] | "\\" _)* "'" }
+  
+  doubleQuoteString { '"' (![\\\"\r\n] | "\\" _)* '"' }
+  
+  LogicalOr { "||" }
+  LogicalAnd { "&&" }
+  EqualityOp { "==" }
+  InequalityOp { "!=" }
+  GreaterThan { ">" }
+  GreaterThanOrEqual { ">=" }
+  LessThan { "<" }
+  LessThanOrEqual { "<=" }
+  
+  // Arithmetic operators
+  Plus { "+" }
+  Minus { "-" }
+  Multiply { "*" }
+  Divide { "/" }
+  
+  // Other operators
+  Not { "!" }
+  Assign { "=" }
+  Arrow { "->" }
+  
+  // Delimiters
+  LParen { "(" }
+  RParen { ")" }
+  LBracket { "[" }
+  RBracket { "]" }
+  LBrace { "{" }
+  RBrace { "}" }
+  Dot { "." }
+  Comma { "," }
+  Semicolon { ";" }
+  Colon { ":" }
+  
+  @precedence { Arrow, GreaterThanOrEqual, GreaterThan, LessThanOrEqual, LessThan, EqualityOp, InequalityOp, LogicalOr, LogicalAnd, Assign }
+}
+
+@external propSource opelHighlighting from "../language/highlight"
+
+@detectDelim

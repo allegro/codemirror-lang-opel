@@ -81,10 +81,11 @@ describe('unused variable warnings', () => {
   });
 
   it('warns for each unused variable independently', () => {
-    const diagnostics = lint("val x = 1; val y = 2; y");
+    const diagnostics = lint("val x = 1; val y = 2; val z = 3; z");
     const unused = diagnostics.filter((d) => d.message.includes('never used'));
 
-    expect(unused).toHaveLength(1);
+    expect(unused).toHaveLength(2);
     expect(unused[0].message).toContain('x');
+    expect(unused[1].message).toContain('y');
   });
 });

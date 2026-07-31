@@ -33,6 +33,15 @@ base - base * discount`,
   }),
 };
 
+export const UnusedVariable: StoryObj = {
+  name: 'Unused Variable (lint warning)',
+  ...createEditorStory({
+    doc: `val unused = 42;
+val used = 10;
+used`,
+  }),
+};
+
 export const DuplicateDeclaration: StoryObj = {
   name: 'Duplicate Declaration (lint error)',
   ...createEditorStory({

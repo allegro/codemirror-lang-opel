@@ -100,6 +100,7 @@ export function opelLinter(options: OpelOptions = {}) {
     const source = doc.toString();
     const delimiterAnalysis = analyzeDelimiters(source);
     const seenVariables: string[] = [];
+    const usedNames = new Set<string>();
 
     const tree = syntaxTree(view.state);
     const allDeclarationsByScope = new Map<number, Map<string, number[]>>();
@@ -266,6 +267,8 @@ export function opelLinter(options: OpelOptions = {}) {
               severity: 'error',
               message,
             });
+          } else {
+            usedNames.add(identifierName);
           }
           return;
         }
@@ -353,6 +356,21 @@ export function opelLinter(options: OpelOptions = {}) {
         }
       }
     });
+
+    for (const declarations of allDeclarationsByScope.values()) {
+      for (const [name, positions] of declarations) {
+        if (!usedNames.has(name)) {
+          for (const from of positions) {
+            diagnostics.push({
+              from,
+              to: from + name.length,
+              severity: 'warning',
+              message: `Variable "${name}" is declared but never used.`,
+            });
+          }
+        }
+      }
+    }
 
     return diagnostics;
   };

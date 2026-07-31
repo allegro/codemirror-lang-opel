@@ -64,3 +64,28 @@ describe('variable declaration order', () => {
     expect(duplicates[0].severity).toBe('error');
   });
 });
+
+describe('unused variable warnings', () => {
+  it('warns when a declared variable is never used', () => {
+    const diagnostics = lint("val x = 1;");
+    const unused = diagnostics.filter((d) => d.message.includes('never used'));
+
+    expect(unused).toHaveLength(1);
+    expect(unused[0].severity).toBe('warning');
+    expect(unused[0].message).toContain('x');
+  });
+
+  it('does not warn when a declared variable is used', () => {
+    const diagnostics = lint("val x = 1; x");
+    expect(diagnostics.filter((d) => d.message.includes('never used'))).toHaveLength(0);
+  });
+
+  it('warns for each unused variable independently', () => {
+    const diagnostics = lint("val x = 1; val y = 2; val z = 3; z");
+    const unused = diagnostics.filter((d) => d.message.includes('never used'));
+
+    expect(unused).toHaveLength(2);
+    expect(unused[0].message).toContain('x');
+    expect(unused[1].message).toContain('y');
+  });
+});

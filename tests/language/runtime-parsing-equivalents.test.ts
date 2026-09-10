@@ -20,6 +20,8 @@ describe('runtime parsing equivalents', () => {
       "zero ( ) == 'zero'",
       "if (true) 'a' else 'b'",
       "if (1 == 1 && 2 == 2) 'a' else 'b'",
+      "source('resource').path.url + '?flag=value' + if (query().get() != null) '?' + query().get() else ''",
+      'isEnabled() && if (matches()) allow() else reject()',
       "(if (true) 'a' else 'b').length()",
       'val x = 2; x + 1',
       'val condition=1==1; if(condition) 5 else 6',

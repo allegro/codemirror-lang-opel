@@ -34,7 +34,6 @@ VariableName {
 }
 
 Expression {
-  IfExpression |
   OrExpression
 }
 
@@ -82,6 +81,7 @@ Train {
 }
 
 Atom {
+  IfExpression |
   FunctionInstantiation |
   FunctionCall |
   NamedValue |

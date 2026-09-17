@@ -111,6 +111,7 @@ export function opelLinter(options: OpelOptions = {}) {
     const source = doc.toString();
     const delimiterAnalysis = analyzeDelimiters(source);
     const usedBeforeDeclarationPositions = new Set<number>();
+    const usedNames = new Set<string>();
 
     const tree = syntaxTree(view.state);
     const allDeclarationsByScope = new Map<number, Map<string, number[]>>();
@@ -262,6 +263,8 @@ export function opelLinter(options: OpelOptions = {}) {
                 message: `Variable "${identifierName}" is used before declaration.`,
               });
             }
+          } else {
+            usedNames.add(identifierName);
           }
           return;
         }
@@ -358,6 +361,21 @@ export function opelLinter(options: OpelOptions = {}) {
         suppressUnknownIdentifierAt: usedBeforeDeclarationPositions,
       })
     );
+
+    for (const declarations of allDeclarationsByScope.values()) {
+      for (const [name, positions] of declarations) {
+        if (!usedNames.has(name)) {
+          for (const from of positions) {
+            diagnostics.push({
+              from,
+              to: from + name.length,
+              severity: 'warning',
+              message: `Variable "${name}" is declared but never used.`,
+            });
+          }
+        }
+      }
+    }
 
     return diagnostics;
   };

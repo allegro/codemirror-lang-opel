@@ -92,7 +92,7 @@ SHALL create a new snapshot and MAY invoke the callback again.
 - **THEN** the system SHALL invoke `onRuntimeIssues` synchronously once for the
   runtime context
 - **AND** it SHALL not add configuration issues to document diagnostics
-- **AND** it SHALL behave as if `runtime` were absent
+- **AND** it SHALL behave as if `runtime` were an empty configuration
 
 #### Scenario: The caller mutates runtime metadata after setup
 
@@ -182,13 +182,13 @@ SHALL be supported without a fixed access-depth limit.
 
 The analyzer SHALL resolve local declarations and lambda parameters before
 runtime globals and functions. Local bindings SHALL shadow runtime symbols.
-When runtime metadata is valid, unknown bare symbols and unknown bare function
-calls SHALL produce diagnostics when no local binding resolves them. A
+Unknown bare symbols and unknown bare function calls SHALL produce
+semantic diagnostics when no local or runtime binding resolves them. A
 shadowing non-callable local SHALL produce a non-callable diagnostic rather
 than falling through to a runtime function. Parenthesized calls SHALL resolve
 the symbol or property first and suppress dependent call diagnostics after a
-root resolution error. Absent or invalid runtime metadata SHALL preserve the
-current linter behavior.
+root resolution error. Missing or invalid runtime metadata SHALL be treated as
+an empty runtime configuration for semantic analysis.
 
 Declaration initializers SHALL see earlier declarations and runtime symbols but
 not their own new binding. Locally declared lambdas SHALL be callable and
@@ -197,7 +197,9 @@ their positional arity SHALL be validated.
 The analyzer SHALL infer boolean results for comparisons, equality, and
 logical expressions; numeric results for known numeric arithmetic; string
 results for known string addition; and the union of both branches for `if`.
-Operand-validity diagnostics are outside this requirement.
+Known arithmetic operands SHALL be validated: `+` accepts two numeric or two
+string operands, while `-`, `*`, and `/` accept two numeric operands. Unknown
+operands SHALL remain permissible.
 
 #### Scenario: A local binding shadows a runtime global
 
@@ -361,10 +363,10 @@ access, configured method calls, and parenthesized callable properties.
 
 ### Requirement: Runtime-aware diagnostics preserve useful ranges and compatibility
 
-With valid runtime metadata, the semantic analyzer SHALL own unresolved bare
-identifier diagnostics and replace the existing declaration diagnostic at that
-range. With absent or invalid runtime metadata, existing declaration
-diagnostics SHALL remain unchanged.
+The semantic analyzer SHALL own unresolved bare identifier and function-call
+diagnostics and replace the existing declaration diagnostic at that range.
+Missing or invalid runtime metadata SHALL provide no runtime symbols, but SHALL
+not disable semantic analysis.
 
 Diagnostics SHALL use the smallest useful range: the identifier or literal key
 for unknown or deprecated symbols and members; the argument expression for a
@@ -386,7 +388,9 @@ then top-level symbol.
 #### Scenario: Runtime metadata is absent
 
 - **WHEN** no runtime metadata is configured
-- **THEN** the linter SHALL preserve the existing declaration diagnostics
+- **THEN** semantic analysis SHALL run with no runtime symbols
+- **AND** an unresolved bare identifier SHALL report an unknown-symbol
+  diagnostic
 - **AND** it SHALL not require runtime configuration
 
 #### Scenario: A deprecated property is used through a deprecated symbol
@@ -401,17 +405,15 @@ then top-level symbol.
 - **THEN** dependent member diagnostics SHALL be suppressed
 - **AND** independent sibling expressions SHALL still be analyzed
 
-#### Scenario: A bare runtime function is unknown
+#### Scenario: A function is unknown
 
-- **WHEN** valid runtime metadata is configured and `missing()` has no local or
-  runtime function binding
-- **THEN** the linter SHALL report an unknown-runtime-function diagnostic
-- **AND** a bare `missing` reference SHALL report an unknown-symbol diagnostic
+- **WHEN** `missing()` has no local or runtime function binding
+- **THEN** the linter SHALL report an unknown-function diagnostic
 
 #### Scenario: Runtime metadata is absent or invalid for a function call
 
 - **WHEN** runtime metadata is absent or invalid and a function-call name is
   unresolved
-- **THEN** the linter SHALL preserve the existing function-call handling
-- **AND** it SHALL not apply runtime-aware unknown-function diagnostics
+- **THEN** semantic analysis SHALL report the same unknown-function diagnostic
+  used for an empty runtime configuration
 

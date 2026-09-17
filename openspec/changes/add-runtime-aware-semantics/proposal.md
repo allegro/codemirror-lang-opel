@@ -22,8 +22,8 @@ for a later change built on the same analyzer.
   semantics.
 - Add runtime-aware diagnostics with documented severity, range, deprecation,
   and cascade-suppression behavior.
-- Preserve current syntax and declaration diagnostics when runtime metadata is
-  absent or invalid.
+- Run semantic analysis against an empty runtime when runtime metadata is
+  absent or invalid, while preserving declaration-order and duplicate checks.
 - Document the runtime API, supported vocabulary, issue contract, and
   migration from `runtimeGlobals`.
 

@@ -3,17 +3,19 @@ import type { Diagnostic } from '@codemirror/lint';
 import type { EditorView } from '@codemirror/view';
 import type { SyntaxNode, SyntaxNodeRef } from '@lezer/common';
 import type { OpelOptions } from '../types';
+import { createRuntimeContext } from '../runtime';
+import { analyzeRuntimeSemantics } from './semantics';
 import { analyzeDelimiters, unsupportedLogicalKeywordNear } from './delimiters';
 import { resolveParseErrorMessage } from './parse-error-message';
-import { findSimilarTerms } from './similar-terms';
+import { OPEL_NODE_NAMES as NODE } from '../syntax/nodes';
 
 type ActiveScope = { id: number; declared: Set<string> };
 
 function isScopeNode(name: string): boolean {
   return (
-    name === 'Program' ||
-    name === 'BlockExpression' ||
-    name === 'FunctionInstantiation'
+    name === NODE.Program ||
+    name === NODE.BlockExpression ||
+    name === NODE.FunctionInstantiation
   );
 }
 
@@ -21,11 +23,13 @@ function collectDeclarationName(
   nodeName: string,
   syntaxNode: SyntaxNode
 ): SyntaxNode | null {
-  if (nodeName === 'Declaration') {
-    return syntaxNode.getChild('VariableName')?.getChild('Identifier') ?? null;
+  if (nodeName === NODE.Declaration) {
+    return (
+      syntaxNode.getChild(NODE.VariableName)?.getChild(NODE.Identifier) ?? null
+    );
   }
-  if (nodeName === 'SingleParam') {
-    return syntaxNode.getChild('Identifier');
+  if (nodeName === NODE.SingleParam) {
+    return syntaxNode.getChild(NODE.Identifier);
   }
   return null;
 }
@@ -91,15 +95,22 @@ function isInsideNode(node: SyntaxNodeRef, type: string): boolean {
 }
 
 export function opelLinter(options: OpelOptions = {}) {
-  const { warnOnLambdaDefinitions = true, runtimeGlobals = [] } = options;
-  const runtimeGlobalsSet = new Set(runtimeGlobals);
+  const { warnOnLambdaDefinitions = true } = options;
+  const runtimeContext = createRuntimeContext(
+    options.runtime,
+    options.onRuntimeIssues
+  );
+  const runtimeNames = new Set([
+    ...Object.keys(runtimeContext.runtime.globals ?? {}),
+    ...Object.keys(runtimeContext.runtime.functions ?? {}),
+  ]);
 
   return (view: EditorView) => {
     const diagnostics: Diagnostic[] = [];
     const doc = view.state.doc;
     const source = doc.toString();
     const delimiterAnalysis = analyzeDelimiters(source);
-    const seenVariables: string[] = [];
+    const usedBeforeDeclarationPositions = new Set<number>();
 
     const tree = syntaxTree(view.state);
     const allDeclarationsByScope = new Map<number, Map<string, number[]>>();
@@ -121,8 +132,8 @@ export function opelLinter(options: OpelOptions = {}) {
           return;
         }
 
-        if (node.name === 'MultiParam') {
-          for (const param of node.node.getChildren('Identifier')) {
+        if (node.name === NODE.MultiParam) {
+          for (const param of node.node.getChildren(NODE.Identifier)) {
             const paramName = doc.sliceString(param.from, param.to);
             addDeclarationPosition(
               allDeclarationsByScope,
@@ -134,7 +145,7 @@ export function opelLinter(options: OpelOptions = {}) {
           return;
         }
 
-        if (node.name === 'Declaration' || node.name === 'SingleParam') {
+        if (node.name === NODE.Declaration || node.name === NODE.SingleParam) {
           const declarationNode = collectDeclarationName(node.name, node.node);
           if (declarationNode) {
             const declarationName = doc.sliceString(
@@ -178,7 +189,6 @@ export function opelLinter(options: OpelOptions = {}) {
       }
 
       scope.add(name);
-      seenVariables.push(name);
     }
 
     let runtimeScopeId = 0;
@@ -188,14 +198,14 @@ export function opelLinter(options: OpelOptions = {}) {
           scopeStack.push({ id: runtimeScopeId++, declared: new Set() });
         }
 
-        if (node.name === 'Identifier') {
+        if (node.name === NODE.Identifier) {
           const identifierName = doc.sliceString(node.from, node.to);
 
           // Skip reserved keywords and literals
           if (['true', 'false', 'null'].includes(identifierName)) {
             return;
           }
-          if (runtimeGlobalsSet.has(identifierName)) {
+          if (runtimeNames.has(identifierName)) {
             return;
           }
 
@@ -205,18 +215,18 @@ export function opelLinter(options: OpelOptions = {}) {
             return;
           }
 
-          const ignoredParents = [
-            'FunctionName',
-            'MethodName',
-            'FieldName',
-            'FunctionCall',
-            'VariableName',
-            'FieldAccess',
-            'MethodCall',
-            'Declaration',
-            'LambdaParams',
-            'SingleParam',
-            'MultiParam',
+          const ignoredParents: string[] = [
+            NODE.FunctionName,
+            NODE.MethodName,
+            NODE.FieldName,
+            NODE.FunctionCall,
+            NODE.VariableName,
+            NODE.FieldAccess,
+            NODE.MethodCall,
+            NODE.Declaration,
+            NODE.LambdaParams,
+            NODE.SingleParam,
+            NODE.MultiParam,
           ];
 
           if (ignoredParents.includes(parent.name)) {
@@ -224,7 +234,7 @@ export function opelLinter(options: OpelOptions = {}) {
           }
 
           if (
-            parent.name === 'NamedValue' &&
+            parent.name === NODE.NamedValue &&
             nextNonWhitespaceChar(source, node.to) === '('
           ) {
             return;
@@ -232,40 +242,26 @@ export function opelLinter(options: OpelOptions = {}) {
 
           // Check if it's accessing a property (obj.property)
           const grandParent = parent.parent;
-          if (grandParent && grandParent.name === 'FieldAccess') {
+          if (grandParent && grandParent.name === NODE.FieldAccess) {
             return;
           }
 
           if (!isDeclared(scopeStack, identifierName)) {
-            let message = '';
+            const usedBeforeDeclaration = hasDeclarationInAccessibleScopes(
+              allDeclarationsByScope,
+              scopeStack,
+              identifierName
+            );
 
-            if (
-              hasDeclarationInAccessibleScopes(
-                allDeclarationsByScope,
-                scopeStack,
-                identifierName
-              )
-            ) {
-              message = `Variable "${identifierName}" is used before declaration.`;
-            } else {
-              const similarVars = findSimilarTerms(
-                identifierName,
-                seenVariables
-              );
-              message = `Variable "${identifierName}" is not declared.`;
-              if (similarVars.length > 0) {
-                message += ` Did you mean: ${similarVars.join(', ')}?`;
-              } else {
-                message += ` Declare it with: val ${identifierName} = value;`;
-              }
+            if (usedBeforeDeclaration) {
+              usedBeforeDeclarationPositions.add(node.from);
+              diagnostics.push({
+                from: node.from,
+                to: node.to,
+                severity: 'error',
+                message: `Variable "${identifierName}" is used before declaration.`,
+              });
             }
-
-            diagnostics.push({
-              from: node.from,
-              to: node.to,
-              severity: 'error',
-              message,
-            });
           }
           return;
         }
@@ -292,7 +288,7 @@ export function opelLinter(options: OpelOptions = {}) {
             isMissingElseBranch:
               isNearEnd &&
               isEmptyOrWhitespace &&
-              isInsideNode(node.node, 'IfExpression'),
+              isInsideNode(node.node, NODE.IfExpression),
             delimiterAnalysis,
             logicalKeyword,
             nodeFrom: node.from,
@@ -308,7 +304,10 @@ export function opelLinter(options: OpelOptions = {}) {
           return;
         }
 
-        if (node.name === 'FunctionInstantiation' && warnOnLambdaDefinitions) {
+        if (
+          node.name === NODE.FunctionInstantiation &&
+          warnOnLambdaDefinitions
+        ) {
           diagnostics.push({
             from: node.from,
             to: node.to,
@@ -319,7 +318,7 @@ export function opelLinter(options: OpelOptions = {}) {
         }
       },
       (node) => {
-        if (node.name === 'Declaration' || node.name === 'SingleParam') {
+        if (node.name === NODE.Declaration || node.name === NODE.SingleParam) {
           const declarationNode = collectDeclarationName(node.name, node.node);
           if (declarationNode) {
             declare(
@@ -327,8 +326,8 @@ export function opelLinter(options: OpelOptions = {}) {
               declarationNode
             );
           }
-        } else if (node.name === 'MultiParam') {
-          for (const param of node.node.getChildren('Identifier')) {
+        } else if (node.name === NODE.MultiParam) {
+          for (const param of node.node.getChildren(NODE.Identifier)) {
             declare(doc.sliceString(param.from, param.to), param);
           }
         }
@@ -340,7 +339,7 @@ export function opelLinter(options: OpelOptions = {}) {
     );
 
     tree.cursor().iterate((node) => {
-      if (node.name === 'Declaration') {
+      if (node.name === NODE.Declaration) {
         // Check whether declaration itself ends with a semicolon.
         const lastChar = doc.sliceString(node.to - 1, node.to);
         if (lastChar !== ';') {
@@ -353,6 +352,12 @@ export function opelLinter(options: OpelOptions = {}) {
         }
       }
     });
+
+    diagnostics.push(
+      ...analyzeRuntimeSemantics(tree.topNode, source, runtimeContext, {
+        suppressUnknownIdentifierAt: usedBeforeDeclarationPositions,
+      })
+    );
 
     return diagnostics;
   };

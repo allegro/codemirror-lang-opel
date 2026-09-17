@@ -18,7 +18,7 @@ later autocomplete change.
 - Validate runtime metadata atomically before enabling runtime semantics.
 - Normalize the supported schema vocabulary into a cycle-safe internal model.
 - Resolve names, schemas, properties, methods, and overloads for linting.
-- Preserve existing behavior when runtime metadata is absent or invalid.
+- Run semantic analysis with an empty runtime when metadata is absent or invalid.
 - Keep diagnostic wording internal while making issue codes and paths stable.
 
 **Non-Goals:**
@@ -28,7 +28,7 @@ later autocomplete change.
 - Network, asynchronous, or callback-based schema loading.
 - Runtime OPEL evaluation.
 - Flow-sensitive narrowing from `if` conditions.
-- Operator operand-validity diagnostics.
+- Runtime evaluation and coercion beyond static operand validation.
 - Heuristic overload ranking.
 - Mutable runtime configuration.
 
@@ -44,9 +44,9 @@ readonly returns schema.
 
 At runtime-context creation, deep-clone caller metadata, validate and normalize
 the clone, then deep-freeze the internal snapshot. If validation produces any
-semantic error, return an invalid context and let the linter run in its
-existing no-runtime mode. Report configuration issues synchronously once per
-context creation, never on each lint pass.
+semantic error, return an empty runtime context and keep semantic analysis
+enabled. Report configuration issues synchronously once per context creation,
+never on each lint pass.
 
 This avoids partially trusted configuration, keeps caller-owned objects
 unmodified, and makes extension reconfiguration the explicit way to change
@@ -92,10 +92,10 @@ Build lexical environments matching the existing declaration and lambda
 behavior. Resolve local bindings first, then runtime globals/functions. Keep
 declaration initializer visibility and shadowing rules explicit so a local
 non-callable binding cannot accidentally fall through to a runtime callable.
-With valid runtime metadata, report unresolved bare symbols and bare function
-calls using syntax-aware diagnostics; parenthesized calls resolve the symbol or
-property first and suppress dependent cascades. With absent or invalid runtime
-metadata, preserve the existing linter behavior.
+Report unresolved bare symbols and bare function calls using syntax-aware
+diagnostics; parenthesized calls resolve the symbol or property first and
+suppress dependent cascades. With absent or invalid runtime metadata, resolve
+only local names and analyze against an empty runtime.
 
 ### Use strict applicability for overloads
 
@@ -142,11 +142,10 @@ unchanged and does not consume runtime metadata.
   → Distinguish complete, partial, and absent member support and suppress only
   dependent cascades.
 - **[Atomic invalidation hides otherwise valid runtime entries]** → Report all
-  configuration issues with stable paths so consumers can fix the contract as
-  a whole.
+  configuration issues with stable paths while continuing document analysis
+  against an empty runtime.
 - **[Removing `runtimeGlobals` is breaking]** → Mark the API change clearly,
-  update migration documentation, and add tests for the absent-runtime
-  compatibility path.
+  update migration documentation, and add tests for empty-runtime behavior.
 - **[Lezer syntax may be incomplete during editing]** → Avoid mismatch and
   ambiguity diagnostics for incomplete or syntactically invalid calls.
 - **[Large semantic scope increases regression risk]** → Keep the existing
@@ -159,7 +158,7 @@ unchanged and does not consume runtime metadata.
    behavior.
 2. Replace `runtimeGlobals` in examples and documentation with the structured
    `runtime` option.
-3. Add runtime-aware linter tests and preserve no-runtime behavior tests.
+3. Add runtime-aware linter tests and empty-runtime behavior tests.
 4. Run unit, typecheck, build, and packaged API verification.
 5. Release the breaking option change with migration notes.
 

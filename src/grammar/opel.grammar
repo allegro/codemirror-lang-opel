@@ -74,10 +74,10 @@ UnaryExpression {
 
 Primary {
   Atom |
-  Train
+  PostfixExpression
 }
 
-Train {
+PostfixExpression {
   Primary Postfix
 }
 

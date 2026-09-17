@@ -3,6 +3,7 @@ import type { SyntaxNode } from '@lezer/common';
 import type {
   OpelCallable,
   OpelMethodReceiver,
+  OpelPrimitive,
   OpelParameter,
   OpelRuntime,
   OpelSchema,
@@ -36,6 +37,7 @@ const RECEIVERS: readonly OpelMethodReceiver[] = [
 
 type Value = {
   schema: OpelSchema;
+  root?: OpelSchema;
   literal?: unknown;
   callable?: Callable;
   error?: boolean;
@@ -43,6 +45,10 @@ type Value = {
 };
 type Callable = OpelCallable & { isLocal?: boolean };
 type Environment = Map<string, Value>;
+
+function schemaRoot(value: Value): OpelSchema {
+  return value.root ?? value.schema;
+}
 type SemanticContext = {
   source: string;
   runtime: OpelRuntime;
@@ -129,7 +135,11 @@ function analyzeExpression(
     const resolvedValue =
       localBinding ??
       (ctx.runtime.globals?.[name] !== undefined
-        ? { schema: ctx.runtime.globals[name], runtime: true }
+        ? {
+            schema: ctx.runtime.globals[name],
+            root: ctx.runtime.globals[name],
+            runtime: true,
+          }
         : undefined) ??
       (ctx.runtime.functions?.[name]
         ? callableValue({ ...ctx.runtime.functions[name], isLocal: false })
@@ -283,6 +293,7 @@ function analyzeExpression(
               value = {
                 schema:
                   (schemaObject(value.schema)?.items as OpelSchema) ?? true,
+                root: schemaRoot(value),
               };
             }
           } else if (
@@ -297,7 +308,7 @@ function analyzeExpression(
             addDiagnostic(
               field,
               'warning',
-              `Dynamic property access is discouraged on closed object type ${schemaDescription(value.schema, value.schema, ctx.runtime)}; use a known property name.`,
+              `Dynamic property access is discouraged on closed object type ${schemaDescription(value.schema, schemaRoot(value), ctx.runtime)}; use a known property name.`,
               ctx.diagnostics
             );
           } else {
@@ -516,7 +527,7 @@ function analyzeExpression(
       node.name === NODE.AdditiveExpression &&
       node.getChildren(NODE.Plus).length > 0 &&
       values.every((value) =>
-        getSchemaTypes(value.schema, value.schema, ctx.runtime).includes(
+        getSchemaTypes(value.schema, schemaRoot(value), ctx.runtime).includes(
           'string'
         )
       )
@@ -559,8 +570,16 @@ function validateArithmeticOperands(
       continue;
     }
 
-    const leftTypes = getSchemaTypes(left.schema, left.schema, ctx.runtime);
-    const rightTypes = getSchemaTypes(right.schema, right.schema, ctx.runtime);
+    const leftTypes = getSchemaTypes(
+      left.schema,
+      schemaRoot(left),
+      ctx.runtime
+    );
+    const rightTypes = getSchemaTypes(
+      right.schema,
+      schemaRoot(right),
+      ctx.runtime
+    );
     const knownLeftTypes = leftTypes.filter((type) => type !== 'never');
     const knownRightTypes = rightTypes.filter((type) => type !== 'never');
     if (
@@ -677,6 +696,30 @@ function resolveSchemaReference(
     : resolveSchemaReference(external, external, runtime, seen);
 }
 
+function intersectSchemaTypes(typeSets: string[][]): string[] {
+  if (typeSets.length === 0) {
+    return [];
+  }
+  let intersection = new Set(typeSets[0]);
+  for (const types of typeSets.slice(1)) {
+    const next = new Set<string>();
+    for (const left of intersection) {
+      for (const right of types) {
+        if (left === right) {
+          next.add(left);
+        } else if (
+          (left === 'number' && right === 'integer') ||
+          (left === 'integer' && right === 'number')
+        ) {
+          next.add('integer');
+        }
+      }
+    }
+    intersection = next;
+  }
+  return [...intersection];
+}
+
 function resolveSchemaVariants(
   schema: OpelSchema,
   root: OpelSchema,
@@ -705,13 +748,31 @@ function resolveSchemaVariants(
     const branches = object.allOf.flatMap((child) =>
       resolveSchemaVariants(child as OpelSchema, root, runtime)
     );
-    const types = new Set(
-      branches.flatMap((branch) => getSchemaTypes(branch, root, runtime))
+    const branchTypes = branches.map((branch) =>
+      getSchemaTypes(branch, root, runtime)
     );
-    if (types.size > 1 && !types.has('number')) {
+    if (branchTypes.some((types) => types.includes('never'))) {
       return [false];
     }
-    return [{ ...object, allOf: branches }];
+    const constrainedTypes = branchTypes.filter((types) => types.length > 0);
+    const intersection = intersectSchemaTypes(constrainedTypes);
+    if (constrainedTypes.length > 1 && intersection.length === 0) {
+      return [false];
+    }
+    return [
+      {
+        ...object,
+        allOf: branches,
+        ...(intersection.length > 0
+          ? {
+              type:
+                intersection.length === 1
+                  ? (intersection[0] as OpelPrimitive)
+                  : (intersection as OpelPrimitive[]),
+            }
+          : {}),
+      },
+    ];
   }
   return [resolved];
 }
@@ -870,19 +931,20 @@ function valueDescription(value: Value, ctx: SemanticContext): string {
   if (value.literal !== undefined) {
     const type = valueType(value.literal);
     if (type === 'object' || type === 'array') {
-      return schemaDescription(value.schema, value.schema, ctx.runtime);
+      return schemaDescription(value.schema, schemaRoot(value), ctx.runtime);
     }
     return type;
   }
-  return schemaDescription(value.schema, value.schema, ctx.runtime);
+  return schemaDescription(value.schema, schemaRoot(value), ctx.runtime);
 }
 
 function availableProperties(
   schema: OpelSchema,
-  ctx: SemanticContext
+  ctx: SemanticContext,
+  root: OpelSchema = schema
 ): string[] {
   const names = new Set<string>();
-  for (const variant of resolveSchemaVariants(schema, schema, ctx.runtime)) {
+  for (const variant of resolveSchemaVariants(schema, root, ctx.runtime)) {
     const properties = schemaObject(variant)?.properties;
     if (isRecord(properties)) {
       Object.keys(properties).forEach((name) => names.add(name));
@@ -895,7 +957,7 @@ function availableMethods(receiver: Value, ctx: SemanticContext): string[] {
   const names = new Set<string>();
   for (const type of getSchemaTypes(
     receiver.schema,
-    receiver.schema,
+    schemaRoot(receiver),
     ctx.runtime
   )) {
     const methods = ctx.runtime.methods?.[type as OpelMethodReceiver];
@@ -947,17 +1009,59 @@ function literalEqual(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
+function isInferredSchemaCompatible(
+  sourceSchema: OpelSchema,
+  targetSchema: OpelSchema,
+  sourceRoot: OpelSchema,
+  targetRoot: OpelSchema,
+  runtime: OpelRuntime
+): boolean {
+  if (sourceSchema === true) {
+    return true;
+  }
+  if (sourceSchema === false) {
+    return false;
+  }
+  const sourceTypes = getSchemaTypes(sourceSchema, sourceRoot, runtime);
+  if (sourceTypes.includes('never')) {
+    return false;
+  }
+  if (sourceTypes.length === 0) {
+    return true;
+  }
+  return sourceTypes.every((sourceType) =>
+    resolveSchemaVariants(targetSchema, targetRoot, runtime).some((variant) => {
+      if (variant === true) {
+        return true;
+      }
+      return (
+        variant !== false &&
+        schemaAllowsType(variant, sourceType, targetRoot, runtime)
+      );
+    })
+  );
+}
+
 function isValueCompatibleWithSchema(
   value: Value,
   schema: OpelSchema,
   root: OpelSchema,
   runtime: OpelRuntime
 ): boolean {
-  if (schema === true || value.error || value.literal === undefined) {
+  if (schema === true || value.error) {
     return true;
   }
   if (schema === false) {
     return false;
+  }
+  if (value.literal === undefined) {
+    return isInferredSchemaCompatible(
+      value.schema,
+      schema,
+      schemaRoot(value),
+      root,
+      runtime
+    );
   }
   for (const variant of resolveSchemaVariants(schema, root, runtime)) {
     if (variant === true) {
@@ -1245,12 +1349,11 @@ function analyzeCall(
     return { schema: true };
   }
   addDeprecation(ctx, node, signature.deprecated ?? callable.deprecated);
-  return {
-    schema:
-      signatures.length === 1
-        ? signature.returns
-        : createUnionSchema(signatures.map((item) => item.returns)),
-  };
+  const resultSchema =
+    signatures.length === 1
+      ? signature.returns
+      : createUnionSchema(signatures.map((item) => item.returns));
+  return { schema: resultSchema, root: resultSchema };
 }
 
 function unknownRuntimeSymbolMessage(
@@ -1306,7 +1409,11 @@ function resolveMethod(
   name: string,
   ctx: SemanticContext
 ): Callable | null {
-  const types = getSchemaTypes(receiver.schema, receiver.schema, ctx.runtime);
+  const types = getSchemaTypes(
+    receiver.schema,
+    schemaRoot(receiver),
+    ctx.runtime
+  );
   const ordered: OpelMethodReceiver[] = [];
   for (const type of types) {
     if (type === 'integer') {
@@ -1335,9 +1442,10 @@ function resolvePropertyAccess(
   }
   const supports: Value[] = [];
   let unsupported = 0;
+  const receiverRoot = schemaRoot(receiver);
   for (const variant of resolveSchemaVariants(
     receiver.schema,
-    receiver.schema,
+    receiverRoot,
     ctx.runtime
   )) {
     if (variant === true) {
@@ -1352,7 +1460,11 @@ function resolvePropertyAccess(
     if (name in properties) {
       const schema = properties[name] as OpelSchema;
       const callable = schemaObject(schema)?.callable as Callable | undefined;
-      supports.push({ schema, ...(callable ? { callable } : {}) });
+      supports.push({
+        schema,
+        root: receiverRoot,
+        ...(callable ? { callable } : {}),
+      });
       addDeprecation(
         ctx,
         node,
@@ -1370,7 +1482,7 @@ function resolvePropertyAccess(
         }
       });
     if (pattern) {
-      supports.push({ schema: pattern[1] as OpelSchema });
+      supports.push({ schema: pattern[1] as OpelSchema, root: receiverRoot });
       continue;
     }
     if (object.additionalProperties === false) {
@@ -1381,7 +1493,7 @@ function resolvePropertyAccess(
         isRecord(object.patternProperties) ||
         object.additionalProperties !== undefined;
       if (!hasPropertyRules) {
-        supports.push({ schema: true });
+        supports.push({ schema: true, root: receiverRoot });
       } else {
         if (object.additionalProperties === undefined) {
           unsupported++;
@@ -1391,6 +1503,7 @@ function resolvePropertyAccess(
             object.additionalProperties && object.additionalProperties !== true
               ? (object.additionalProperties as OpelSchema)
               : true,
+          root: receiverRoot,
         });
       }
     }
@@ -1399,20 +1512,21 @@ function resolvePropertyAccess(
     addDiagnostic(
       node,
       'error',
-      `Unknown property "${name}" on type ${schemaDescription(receiver.schema, receiver.schema, ctx.runtime)}. Available properties: ${formatNames(availableProperties(receiver.schema, ctx))}.`,
+      `Unknown property "${name}" on type ${schemaDescription(receiver.schema, schemaRoot(receiver), ctx.runtime)}. Available properties: ${formatNames(availableProperties(receiver.schema, ctx, schemaRoot(receiver)))}.`,
       ctx.diagnostics
     );
   } else if (unsupported > 0) {
     addDiagnostic(
       node,
       'warning',
-      `Be careful: property "${name}" is not available on every member of type ${schemaDescription(receiver.schema, receiver.schema, ctx.runtime)}. Available properties: ${formatNames(availableProperties(receiver.schema, ctx))}.`,
+      `Be careful: property "${name}" is not available on every member of type ${schemaDescription(receiver.schema, schemaRoot(receiver), ctx.runtime)}. Available properties: ${formatNames(availableProperties(receiver.schema, ctx, schemaRoot(receiver)))}.`,
       ctx.diagnostics
     );
   }
   const callable = supports.length === 1 ? supports[0].callable : undefined;
   return {
     schema: createUnionSchema(supports.map((value) => value.schema)),
+    root: receiverRoot,
     ...(callable ? { callable } : {}),
   };
 }

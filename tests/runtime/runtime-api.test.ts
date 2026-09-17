@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type {
   OpelCallable,
-  OpelMethodReceiver,
   OpelRuntime,
   OpelSchema,
   OpelRuntimeIssue,
@@ -45,24 +44,29 @@ const runtime: OpelRuntime = {
   schemas: { User: userSchema },
 };
 
-const receiverCategories: readonly OpelMethodReceiver[] = [
-  'string',
-  'number',
-  'integer',
-  'boolean',
-  'array',
-  'object',
-];
+const partialMethodsRuntime: OpelRuntime = {
+  methods: {
+    string: {
+      length: {
+        signatures: [{ parameters: [], returns: { type: 'integer' } }],
+      },
+    },
+  },
+};
 
 describe('runtime API', () => {
   it('accepts the public runtime contract and exposes runtime diagnostics separately', () => {
     const issues: OpelRuntimeIssue[] = [];
-    expect(runtime.globals?.user).toBeDefined();
-    expect(lookup.signatures[0].parameters[1].optional).toBe(true);
-    expect(receiverCategories).toHaveLength(6);
     expect(() =>
       lint('user.name', {
         runtime,
+        onRuntimeIssues: (next) => issues.push(...next),
+      })
+    ).not.toThrow();
+    expect(issues).toHaveLength(0);
+    expect(() =>
+      lint("'abc'.length()", {
+        runtime: partialMethodsRuntime,
         onRuntimeIssues: (next) => issues.push(...next),
       })
     ).not.toThrow();

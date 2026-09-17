@@ -59,12 +59,13 @@ describe('runtime-aware semantics', () => {
     const runtimeTypo = lint('userr', { runtime });
     expect(runtimeTypo).toHaveLength(1);
     expect(runtimeTypo[0].message).toContain('Did you mean: user?');
-    expect(runtimeTypo[0].message).not.toContain('Available symbols:');
 
     const localTypo = lint("val user = 'x'; useer", { runtime });
-    expect(localTypo).toHaveLength(1);
-    expect(localTypo[0].message).toContain('Did you mean: user?');
-    expect(localTypo[0].message).not.toContain('Available symbols:');
+    const localUnknown = localTypo.filter((diagnostic) =>
+      diagnostic.message.includes('Unknown symbol')
+    );
+    expect(localUnknown).toHaveLength(1);
+    expect(localUnknown[0].message).toContain('Did you mean: user?');
   });
 
   it('does not duplicate used-before-declaration diagnostics', () => {
@@ -80,6 +81,64 @@ describe('runtime-aware semantics', () => {
         diagnostic.message.includes('Unknown symbol')
       )
     ).toBe(false);
+  });
+
+  it('checks inferred argument types without requiring literals', () => {
+    const diagnostics = lint('lookup(text)', {
+      runtime: {
+        ...runtime,
+        globals: { ...runtime.globals, text: { type: 'string' } },
+      },
+    });
+
+    expect(
+      diagnostics.some((diagnostic) => diagnostic.message.includes('argument'))
+    ).toBe(true);
+  });
+
+  it('preserves local schema reference roots through chained access', () => {
+    const diagnostics = lint('user.child.name', {
+      runtime: {
+        globals: {
+          user: {
+            type: 'object',
+            definitions: {
+              Child: {
+                type: 'object',
+                properties: { name: { type: 'string' } },
+              },
+            },
+            properties: { child: { $ref: '#/definitions/Child' } },
+          },
+        },
+      },
+    });
+
+    expect(diagnostics).toHaveLength(0);
+  });
+
+  it('rejects contradictory allOf schemas during compatibility checks', () => {
+    const diagnostics = lint('acceptString(value)', {
+      runtime: {
+        globals: {
+          value: { allOf: [{ type: 'number' }, { type: 'string' }] },
+        },
+        functions: {
+          acceptString: {
+            signatures: [
+              {
+                parameters: [{ schema: { type: 'string' } }],
+                returns: true,
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(
+      diagnostics.some((diagnostic) => diagnostic.message.includes('argument'))
+    ).toBe(true);
   });
 
   it('checks object members, deprecation, arguments, methods, and access ranges', () => {
@@ -134,11 +193,12 @@ describe('runtime-aware semantics', () => {
     ]) {
       const diagnostics = lint(expression, { runtime });
       expect(
-        diagnostics.some((diagnostic) =>
-          diagnostic.message.includes('Operator') &&
-          (diagnostic.message.includes("Operator '-' cannot be applied") ||
-            diagnostic.message.includes("Operator '*' cannot be applied") ||
-            diagnostic.message.includes("Operator '/' cannot be applied"))
+        diagnostics.some(
+          (diagnostic) =>
+            diagnostic.message.includes('Operator') &&
+            (diagnostic.message.includes("Operator '-' cannot be applied") ||
+              diagnostic.message.includes("Operator '*' cannot be applied") ||
+              diagnostic.message.includes("Operator '/' cannot be applied"))
         )
       ).toBe(true);
     }

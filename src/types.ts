@@ -61,7 +61,7 @@ export interface OpelRuntime {
   readonly globals?: Readonly<Record<string, OpelSchema>>;
   readonly functions?: Readonly<Record<string, OpelCallable>>;
   readonly methods?: Readonly<
-    Record<OpelMethodReceiver, Readonly<Record<string, OpelCallable>>>
+    Partial<Record<OpelMethodReceiver, Readonly<Record<string, OpelCallable>>>>
   >;
   readonly schemas?: Readonly<Record<string, OpelSchema>>;
 }

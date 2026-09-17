@@ -255,16 +255,21 @@ function validateSchema(
     }
   }
   for (const key of ['items', 'additionalProperties']) {
-    if (isRecord(schema[key]) || typeof schema[key] === 'boolean') {
-      validateSchema(
-        schema[key],
-        `${path}/${key}`,
-        root,
-        schemas,
-        issues,
-        active
-      );
+    if (!(key in schema)) {
+      continue;
     }
+    const value = schema[key];
+    if (!isRecord(value) && typeof value !== 'boolean') {
+      issues.push(
+        issue(
+          'invalid-schema',
+          `${path}/${key}`,
+          `${key} must be a boolean or schema object`
+        )
+      );
+      continue;
+    }
+    validateSchema(value, `${path}/${key}`, root, schemas, issues, active);
   }
   for (const key of ['oneOf', 'anyOf', 'allOf']) {
     if (key in schema && !Array.isArray(schema[key])) {

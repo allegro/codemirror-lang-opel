@@ -56,6 +56,32 @@ describe('runtime semantic edge cases', () => {
     ).toBe(true);
   });
 
+  it('reports malformed items and additionalProperties schemas', () => {
+    for (const [keyword, schema] of [
+      ['items', { type: 'array', items: 'invalid' }],
+      [
+        'additionalProperties',
+        { type: 'object', additionalProperties: 'invalid' },
+      ],
+    ] as const) {
+      const issues: { code: string; path: string }[] = [];
+      lint('value', {
+        runtime: {
+          globals: { value: schema as never },
+        },
+        onRuntimeIssues: (next) => issues.push(...next),
+      });
+
+      expect(
+        issues.some(
+          (issue) =>
+            issue.code === 'invalid-schema' &&
+            issue.path.endsWith(`/${keyword}`)
+        )
+      ).toBe(true);
+    }
+  });
+
   it('uses strict overloads, optional trailing parameters, and integer number inheritance', () => {
     const runtime = {
       functions: {

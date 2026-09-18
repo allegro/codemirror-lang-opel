@@ -141,6 +141,562 @@ describe('runtime-aware semantics', () => {
     ).toBe(true);
   });
 
+  it('resolves parameter-local references against each parameter schema', () => {
+    const diagnostics = lint('accept(text)', {
+      runtime: {
+        globals: { text: { type: 'string' } },
+        functions: {
+          accept: {
+            signatures: [
+              {
+                parameters: [
+                  {
+                    schema: {
+                      $ref: '#/definitions/Text',
+                      definitions: { Text: { type: 'string' } },
+                    },
+                  },
+                ],
+                returns: true,
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(diagnostics).toHaveLength(0);
+  });
+
+  it('checks non-literal const, enum, object, required, and item constraints', () => {
+    const options = {
+      runtime: {
+        globals: {
+          constValue: { const: 'actual' },
+          enumValue: { enum: ['actual'] },
+          objectValue: {
+            type: 'object',
+            properties: { id: { type: 'integer' } },
+          },
+          itemsValue: { type: 'array', items: { type: 'string' } },
+        },
+        functions: {
+          acceptConst: {
+            signatures: [
+              {
+                parameters: [{ schema: { const: 'expected' } }],
+                returns: true,
+              },
+            ],
+          },
+          acceptEnum: {
+            signatures: [
+              {
+                parameters: [{ schema: { enum: ['expected'] } }],
+                returns: true,
+              },
+            ],
+          },
+          acceptObject: {
+            signatures: [
+              {
+                parameters: [
+                  {
+                    schema: {
+                      type: 'object',
+                      properties: { id: { type: 'string' } },
+                      required: ['name'],
+                    },
+                  },
+                ],
+                returns: true,
+              },
+            ],
+          },
+          acceptItems: {
+            signatures: [
+              {
+                parameters: [
+                  { schema: { type: 'array', items: { type: 'integer' } } },
+                ],
+                returns: true,
+              },
+            ],
+          },
+        },
+      },
+    };
+    const diagnostics = [
+      ...lint('acceptConst(constValue)', options),
+      ...lint('acceptEnum(enumValue)', options),
+      ...lint('acceptObject(objectValue)', options),
+      ...lint('acceptItems(itemsValue)', options),
+    ];
+
+    expect(
+      diagnostics.filter((diagnostic) =>
+        diagnostic.message.includes('argument')
+      )
+    ).toHaveLength(4);
+  });
+
+  it('preserves allOf alternatives and merged object properties', () => {
+    const options = {
+      runtime: {
+        globals: {
+          value: {
+            allOf: [
+              {
+                oneOf: [
+                  { type: 'object', properties: { name: { type: 'string' } } },
+                  { type: 'object', properties: { id: { type: 'integer' } } },
+                ],
+              },
+              {
+                type: 'object',
+                properties: { common: { type: 'boolean' } },
+              },
+            ],
+            additionalProperties: false,
+          },
+        },
+      },
+    };
+    const diagnostics = [
+      ...lint('value.common', options),
+      ...lint('value.name', options),
+      ...lint('value.id', options),
+    ];
+
+    expect(
+      diagnostics.filter((diagnostic) =>
+        diagnostic.message.includes('Unknown property')
+      )
+    ).toHaveLength(0);
+    expect(
+      diagnostics.filter((diagnostic) =>
+        diagnostic.message.includes('not available on every member')
+      )
+    ).toHaveLength(2);
+  });
+
+  it('infers bare object keys and requires present non-literal properties', () => {
+    const options = {
+      runtime: {
+        globals: { text: { type: 'string' } },
+        functions: {
+          acceptInteger: {
+            signatures: [
+              {
+                parameters: [
+                  {
+                    schema: {
+                      type: 'object',
+                      properties: { id: { type: 'integer' } },
+                    },
+                  },
+                ],
+                returns: true,
+              },
+            ],
+          },
+          acceptRequired: {
+            signatures: [
+              {
+                parameters: [
+                  {
+                    schema: {
+                      type: 'object',
+                      properties: { id: { type: 'string' } },
+                      required: ['id'],
+                    },
+                  },
+                ],
+                returns: true,
+              },
+            ],
+          },
+        },
+      },
+    };
+
+    expect(lint('acceptInteger({id: text})', options)).toHaveLength(1);
+    expect(lint('acceptRequired({id: text})', options)).toHaveLength(0);
+  });
+
+  it('rejects broad schemas for const and enum parameters', () => {
+    const options = {
+      runtime: {
+        globals: { text: { type: 'string' } },
+        functions: {
+          acceptConst: {
+            signatures: [
+              { parameters: [{ schema: { const: 'x' } }], returns: true },
+            ],
+          },
+          acceptEnum: {
+            signatures: [
+              { parameters: [{ schema: { enum: ['x'] } }], returns: true },
+            ],
+          },
+        },
+      },
+    };
+
+    expect(lint('acceptConst(text)', options)).toHaveLength(1);
+    expect(lint('acceptEnum(text)', options)).toHaveLength(1);
+  });
+
+  it('checks pattern properties and typed additional properties', () => {
+    const options = {
+      runtime: {
+        globals: { text: { type: 'string' } },
+        functions: {
+          acceptPattern: {
+            signatures: [
+              {
+                parameters: [
+                  {
+                    schema: {
+                      type: 'object',
+                      patternProperties: { '^x-': { type: 'string' } },
+                      additionalProperties: false,
+                    },
+                  },
+                ],
+                returns: true,
+              },
+            ],
+          },
+          acceptTyped: {
+            signatures: [
+              {
+                parameters: [
+                  {
+                    schema: {
+                      type: 'object',
+                      additionalProperties: { type: 'integer' },
+                    },
+                  },
+                ],
+                returns: true,
+              },
+            ],
+          },
+        },
+      },
+    };
+
+    expect(lint("acceptPattern({'x-id': text})", options)).toHaveLength(0);
+    expect(lint("acceptTyped({'count': 'x'})", options)).toHaveLength(1);
+  });
+
+  it('requires properties to satisfy every matching pattern', () => {
+    const diagnostics = lint('acceptInteger(value.x)', {
+      runtime: {
+        globals: {
+          value: {
+            type: 'object',
+            patternProperties: {
+              '^x': { type: 'integer' },
+              x$: { type: 'string' },
+            },
+          },
+        },
+        functions: {
+          acceptInteger: {
+            signatures: [
+              { parameters: [{ schema: { type: 'integer' } }], returns: true },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(
+      diagnostics.some((diagnostic) => diagnostic.message.includes('argument'))
+    ).toBe(true);
+  });
+
+  it('enforces pattern constraints alongside explicit properties', () => {
+    const diagnostics = lint('acceptString(value.name)', {
+      runtime: {
+        globals: {
+          value: {
+            type: 'object',
+            properties: { name: { type: 'string' } },
+            patternProperties: { '^name$': { type: 'integer' } },
+          },
+        },
+        functions: {
+          acceptString: {
+            signatures: [
+              { parameters: [{ schema: { type: 'string' } }], returns: true },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(
+      diagnostics.some((diagnostic) => diagnostic.message.includes('argument'))
+    ).toBe(true);
+  });
+
+  it('does not treat unrestricted extra properties as compatible', () => {
+    const diagnostics = [
+      ...lint('acceptClosed(open)', {
+        runtime: {
+          globals: {
+            open: { type: 'object', additionalProperties: true },
+          },
+          functions: {
+            acceptClosed: {
+              signatures: [
+                {
+                  parameters: [
+                    { schema: { type: 'object', additionalProperties: false } },
+                  ],
+                  returns: true,
+                },
+              ],
+            },
+          },
+        },
+      }),
+      ...lint('acceptTyped(open)', {
+        runtime: {
+          globals: {
+            open: { type: 'object', additionalProperties: true },
+          },
+          functions: {
+            acceptTyped: {
+              signatures: [
+                {
+                  parameters: [
+                    {
+                      schema: {
+                        type: 'object',
+                        additionalProperties: { type: 'string' },
+                      },
+                    },
+                  ],
+                  returns: true,
+                },
+              ],
+            },
+          },
+        },
+      }),
+    ];
+
+    expect(
+      diagnostics.filter((diagnostic) =>
+        diagnostic.message.includes('argument')
+      )
+    ).toHaveLength(2);
+  });
+
+  it('keeps branch-specific additional property constraints in allOf', () => {
+    const diagnostics = [
+      ...lint('closedValue.extra', {
+        runtime: {
+          globals: {
+            closedValue: {
+              allOf: [
+                {
+                  type: 'object',
+                  properties: { known: { type: 'string' } },
+                  additionalProperties: false,
+                },
+                {
+                  type: 'object',
+                  properties: { extra: { type: 'integer' } },
+                },
+              ],
+            },
+          },
+        },
+      }),
+      ...lint('acceptInteger(typedValue.extra)', {
+        runtime: {
+          globals: {
+            typedValue: {
+              allOf: [
+                {
+                  type: 'object',
+                  properties: { known: { type: 'string' } },
+                  additionalProperties: { type: 'string' },
+                },
+                {
+                  type: 'object',
+                  properties: { extra: { type: 'integer' } },
+                },
+              ],
+            },
+          },
+          functions: {
+            acceptInteger: {
+              signatures: [
+                {
+                  parameters: [{ schema: { type: 'integer' } }],
+                  returns: true,
+                },
+              ],
+            },
+          },
+        },
+      }),
+    ];
+
+    expect(
+      diagnostics.some((diagnostic) =>
+        diagnostic.message.includes('Unknown property')
+      )
+    ).toBe(true);
+    expect(
+      diagnostics.some((diagnostic) => diagnostic.message.includes('argument'))
+    ).toBe(true);
+  });
+
+  it('checks source pattern properties against target patterns', () => {
+    const diagnostics = lint('accept(source)', {
+      runtime: {
+        globals: {
+          source: {
+            type: 'object',
+            patternProperties: { '^x': { type: 'string' } },
+          },
+        },
+        functions: {
+          accept: {
+            signatures: [
+              {
+                parameters: [
+                  {
+                    schema: {
+                      type: 'object',
+                      patternProperties: { '^x': { type: 'integer' } },
+                    },
+                  },
+                ],
+                returns: true,
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(
+      diagnostics.some((diagnostic) => diagnostic.message.includes('argument'))
+    ).toBe(true);
+  });
+
+  it('filters impossible enum members from allOf intersections', () => {
+    const diagnostics = lint('accept(value)', {
+      runtime: {
+        globals: {
+          value: {
+            allOf: [{ enum: ['valid', 1] }, { type: 'string' }],
+          },
+        },
+        functions: {
+          accept: {
+            signatures: [
+              { parameters: [{ schema: { enum: ['valid'] } }], returns: true },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(diagnostics).toHaveLength(0);
+  });
+
+  it('decodes escaped object literal keys before schema matching', () => {
+    const diagnostics = lint("accept({'a\\nb': 1})", {
+      runtime: {
+        functions: {
+          accept: {
+            signatures: [
+              {
+                parameters: [
+                  {
+                    schema: {
+                      type: 'object',
+                      properties: { 'a\nb': { type: 'integer' } },
+                      required: ['a\nb'],
+                    },
+                  },
+                ],
+                returns: true,
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(diagnostics).toHaveLength(0);
+  });
+
+  it('preserves required, items, and repeated const constraints in allOf', () => {
+    const options = {
+      runtime: {
+        globals: {
+          requiredValue: {
+            allOf: [
+              { required: ['id'] },
+              { type: 'object', properties: { id: { type: 'string' } } },
+            ],
+          },
+          itemsValue: {
+            allOf: [{ items: { type: 'string' } }, { type: 'array' }],
+          },
+          constValue: { allOf: [{ const: 'x' }, { const: 'x' }] },
+        },
+        functions: {
+          acceptRequired: {
+            signatures: [
+              {
+                parameters: [
+                  {
+                    schema: {
+                      type: 'object',
+                      properties: { id: { type: 'string' } },
+                      required: ['id'],
+                    },
+                  },
+                ],
+                returns: true,
+              },
+            ],
+          },
+          acceptItems: {
+            signatures: [
+              {
+                parameters: [
+                  { schema: { type: 'array', items: { type: 'integer' } } },
+                ],
+                returns: true,
+              },
+            ],
+          },
+          acceptConst: {
+            signatures: [
+              { parameters: [{ schema: { const: 'y' } }], returns: true },
+            ],
+          },
+        },
+      },
+    };
+
+    expect(lint('acceptRequired(requiredValue)', options)).toHaveLength(0);
+    expect(lint('acceptItems(itemsValue)', options)).toHaveLength(1);
+    expect(lint('acceptConst(constValue)', options)).toHaveLength(1);
+  });
+
   it('checks object members, deprecation, arguments, methods, and access ranges', () => {
     const deprecated = lint('user.name', { runtime });
     const unknownProperty = lint('user.missing', { runtime });

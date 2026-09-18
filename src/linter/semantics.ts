@@ -46,6 +46,14 @@ type Value = {
 type Callable = OpelCallable & { isLocal?: boolean };
 type Environment = Map<string, Value>;
 
+const SCHEMA_ROOTS = new WeakMap<object, OpelSchema>();
+const SCHEMA_BRANCH_ROOTS = new WeakMap<object, OpelSchema[]>();
+
+/**
+ * Returns the schema document used to resolve local references for a value.
+ * Derived values keep their originating root; primitive or synthetic values use their own schema.
+ * Why: This prevents a property or method access from losing the definitions document that introduced it.
+ */
 function schemaRoot(value: Value): OpelSchema {
   return value.root ?? value.schema;
 }
@@ -61,6 +69,11 @@ type SemanticAnalysisOptions = {
   suppressUnknownIdentifierAt?: ReadonlySet<number>;
 };
 
+/**
+ * Runs semantic analysis for each top-level OPEL body and returns document diagnostics.
+ * It creates one analysis context, then delegates scope traversal and expression inference to the helpers below.
+ * Why: A shared context lets nested helpers report consistent diagnostics and de-duplicate warnings during one analysis pass.
+ */
 export function analyzeRuntimeSemantics(
   tree: SyntaxNode,
   source: string,
@@ -83,6 +96,11 @@ export function analyzeRuntimeSemantics(
   return ctx.diagnostics;
 }
 
+/**
+ * Analyzes declarations in source order and then analyzes the body's final expression.
+ * Each initializer is inferred before its binding is added to the lexical environment.
+ * Why: Analyzing initializers before binding them preserves OPEL declaration-order visibility rules.
+ */
 function analyzeScopeBody(
   body: SyntaxNode,
   env: Environment,
@@ -109,6 +127,11 @@ function analyzeScopeBody(
     : { schema: true };
 }
 
+/**
+ * Recursively analyzes a syntax node and returns its inferred value, schema, and optional literal.
+ * The traversal handles calls, lambdas, postfix access, operators, literals, and nested expressions while emitting semantic diagnostics.
+ * Why: Returning a compact Value lets later access, call, and operator checks reuse the same inferred information instead of re-walking syntax.
+ */
 function analyzeExpression(
   node: SyntaxNode,
   env: Environment,
@@ -176,7 +199,6 @@ function analyzeExpression(
       args,
       node,
       ctx,
-      value.schema,
       node.getChild(NODE.Args)
         ? node.getChild(NODE.Args)!.getChildren(NODE.Expression)
         : []
@@ -252,7 +274,6 @@ function analyzeExpression(
             args,
             method,
             ctx,
-            value.schema,
             method.getChild(NODE.Args)
               ? method.getChild(NODE.Args)!.getChildren(NODE.Expression)
               : []
@@ -273,9 +294,10 @@ function analyzeExpression(
           const key = expression
             ? analyzeExpression(expression, env, ctx)
             : { schema: true };
+          const receiverRoot = schemaRoot(value);
           const receiverTypes = getSchemaTypes(
             value.schema,
-            value.schema,
+            receiverRoot,
             ctx.runtime
           );
           if (receiverTypes.includes('array')) {
@@ -290,10 +312,30 @@ function analyzeExpression(
                 ctx.diagnostics
               );
             } else {
+              const itemValues = resolveSchemaVariants(
+                value.schema,
+                receiverRoot,
+                ctx.runtime
+              ).flatMap((resolution) => {
+                const items = schemaObject(resolution.schema)?.items as
+                  | OpelSchema
+                  | undefined;
+                return items === undefined
+                  ? []
+                  : [
+                      {
+                        schema: items,
+                        root: schemaRootFor(items, resolution.root),
+                      },
+                    ];
+              });
+              const itemSchema = createUnionSchema(
+                itemValues.map((item) => item.schema),
+                itemValues.map((item) => item.root)
+              );
               value = {
-                schema:
-                  (schemaObject(value.schema)?.items as OpelSchema) ?? true,
-                root: schemaRoot(value),
+                schema: itemSchema,
+                root: itemValues[0]?.root ?? receiverRoot,
               };
             }
           } else if (
@@ -338,7 +380,6 @@ function analyzeExpression(
             args,
             group,
             ctx,
-            value.schema,
             group.getChild(NODE.Args)
               ? group.getChild(NODE.Args)!.getChildren(NODE.Expression)
               : []
@@ -432,9 +473,16 @@ function analyzeExpression(
           continue;
         }
         const keyText = ctx.source.slice(key.from, key.to);
-        const keyValue = /^['"].*['"]$/.test(keyText)
-          ? keyText.slice(1, -1)
-          : readLiteralValue(key, ctx.source).value;
+        const atom = key.getChild(NODE.Atom);
+        const literalKey = readLiteralValue(
+          atom?.getChild(NODE.StringLiteral) ?? key,
+          ctx.source
+        );
+        const keyValue = literalKey.hasLiteralValue
+          ? literalKey.value
+          : atom?.getChild(NODE.NamedValue)?.getChild(NODE.Identifier)
+            ? keyText
+            : undefined;
         if (typeof keyValue === 'string') {
           const value = analyzeExpression(valueNode, env, ctx);
           properties[keyValue] = value.callable
@@ -446,7 +494,12 @@ function analyzeExpression(
         }
       }
       return {
-        schema: { type: 'object', properties },
+        schema: {
+          type: 'object',
+          properties,
+          required: Object.keys(properties),
+          additionalProperties: false,
+        },
         literal:
           Object.keys(literal).length === Object.keys(properties).length
             ? literal
@@ -549,6 +602,11 @@ function analyzeExpression(
   return { schema: true };
 }
 
+/**
+ * Validates every adjacent operand pair against the operator between them.
+ * Unknown and impossible schemas are skipped; known invalid pairs receive a diagnostic at the operator.
+ * Why: Checking operators statically gives authors the same feedback as the runtime without attempting to evaluate the expression.
+ */
 function validateArithmeticOperands(
   node: SyntaxNode,
   values: Value[],
@@ -611,6 +669,11 @@ function validateArithmeticOperands(
   return invalid;
 }
 
+/**
+ * Reports whether two primitive types may be combined by one arithmetic operator.
+ * Addition accepts either two numeric values or two strings; the other operators accept numeric values only.
+ * Why: Keeping the operator matrix in one helper prevents arithmetic rules from diverging across expression forms.
+ */
 function isValidArithmeticPair(
   operatorName: string,
   leftType: string,
@@ -626,6 +689,11 @@ function isValidArithmeticPair(
   return numeric(leftType) && numeric(rightType);
 }
 
+/**
+ * Appends a CodeMirror diagnostic using the node range unless an explicit range is supplied.
+ * Keeping this operation centralized makes severity and range handling consistent.
+ * Why: Centralizing diagnostic creation keeps ranges and severity consistent across the many semantic checks.
+ */
 function addDiagnostic(
   node: SyntaxNode,
   severity: Diagnostic['severity'],
@@ -637,65 +705,136 @@ function addDiagnostic(
   diagnostics.push({ from, to, severity, message });
 }
 
+/**
+ * Identifies plain object-like values used by the runtime schema model.
+ * Arrays are excluded because schema maps and schema objects are keyed records.
+ */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
+/**
+ * Converts a boolean-or-object schema into its object representation when possible.
+ * Boolean schemas remain handled explicitly by callers as allow-all or impossible schemas.
+ */
 function schemaObject(value: OpelSchema): Record<string, unknown> | null {
   return isRecord(value) ? value : null;
 }
 
-function createUnionSchema(schemas: OpelSchema[]): OpelSchema {
+/**
+ * Records the document root associated with a derived schema object.
+ * Boolean schemas have no object identity, so their caller-provided fallback root remains authoritative.
+ * Why: Composition can combine children from different external documents; the association keeps each child reference resolvable later.
+ */
+function rememberSchemaRoot(schema: OpelSchema, root: OpelSchema): void {
+  if (isRecord(schema)) {
+    SCHEMA_ROOTS.set(schema, root);
+  }
+}
+
+/**
+ * Gets a schema's recorded document root, falling back to the root supplied by the current traversal.
+ */
+function schemaRootFor(schema: OpelSchema, fallback: OpelSchema): OpelSchema {
+  return isRecord(schema) ? (SCHEMA_ROOTS.get(schema) ?? fallback) : fallback;
+}
+
+/**
+ * Builds the compact union representation used for inferred values.
+ * Nested `oneOf` branches are flattened, unknown branches are discarded, and singleton roots are preserved.
+ * Why: A normalized union keeps downstream schema traversal small and prevents nested inferred unions from obscuring available members.
+ */
+function createUnionSchema(
+  schemas: OpelSchema[],
+  roots: OpelSchema[] = []
+): OpelSchema {
   const flattened: OpelSchema[] = [];
-  for (const schema of schemas) {
+  const flattenedRoots: OpelSchema[] = [];
+  for (const [index, schema] of schemas.entries()) {
+    const fallbackRoot = roots[index] ?? schema;
     const object = schemaObject(schema);
+    const branchRoots = object ? SCHEMA_BRANCH_ROOTS.get(object) : undefined;
     if (object && Array.isArray(object.oneOf)) {
-      flattened.push(...(object.oneOf as OpelSchema[]));
+      for (const [branchIndex, branch] of object.oneOf.entries()) {
+        flattened.push(branch as OpelSchema);
+        flattenedRoots.push(
+          branchRoots?.[branchIndex] ??
+            schemaRootFor(branch as OpelSchema, fallbackRoot)
+        );
+      }
     } else if (schema !== true) {
       flattened.push(schema);
+      flattenedRoots.push(schemaRootFor(schema, fallbackRoot));
     }
   }
   if (flattened.length === 0) {
     return true;
   }
   if (flattened.length === 1) {
+    rememberSchemaRoot(flattened[0], flattenedRoots[0]);
     return flattened[0];
   }
-  return { oneOf: flattened };
+  const union = { oneOf: flattened };
+  SCHEMA_BRANCH_ROOTS.set(union, flattenedRoots);
+  rememberSchemaRoot(union, flattenedRoots[0]);
+  return union;
 }
 
+/**
+ * Decodes one JSON Pointer path segment using the standard `~1` and `~0` escapes.
+ * Semantic reference lookup uses this before indexing definitions or `$defs`.
+ */
+function decodePointerSegment(value: string): string {
+  return value.replace(/~1/g, '/').replace(/~0/g, '~');
+}
+
+type SchemaResolution = {
+  schema: OpelSchema;
+  root: OpelSchema;
+};
+
+/**
+ * Resolves one local or exact external schema reference without eagerly expanding the whole graph.
+ * The active-reference set terminates recursive schemas, and external schemas become the root for their own local references.
+ * Why: Lazy, cycle-safe resolution avoids expanding recursive runtime schemas and keeps local references tied to the correct document root.
+ */
 function resolveSchemaReference(
   schema: OpelSchema,
   root: OpelSchema,
   runtime: OpelRuntime,
   seen = new Set<string>()
-): OpelSchema {
+): SchemaResolution {
+  const effectiveRoot = schemaRootFor(schema, root);
   const object = schemaObject(schema);
   if (!object || typeof object.$ref !== 'string' || seen.has(object.$ref)) {
-    return schema;
+    return { schema, root: effectiveRoot };
   }
   const ref = object.$ref;
   seen.add(ref);
   if (ref.startsWith('#/')) {
-    const [section, name] = ref.slice(2).split('/');
-    const rootObject = schemaObject(root);
+    const [section, name] = ref.slice(2).split('/').map(decodePointerSegment);
+    const rootObject = schemaObject(effectiveRoot);
     const definitions = rootObject?.[section];
     if (isRecord(definitions) && name in definitions) {
-      return resolveSchemaReference(
-        definitions[name] as OpelSchema,
-        root,
-        runtime,
-        seen
-      );
+      const target = definitions[name] as OpelSchema;
+      rememberSchemaRoot(target, effectiveRoot);
+      return resolveSchemaReference(target, effectiveRoot, runtime, seen);
     }
-    return false;
+    return { schema: false, root: effectiveRoot };
   }
   const external = runtime.schemas?.[ref];
-  return external === undefined
-    ? false
-    : resolveSchemaReference(external, external, runtime, seen);
+  if (external === undefined) {
+    return { schema: false, root: effectiveRoot };
+  }
+  rememberSchemaRoot(external, external);
+  return resolveSchemaReference(external, external, runtime, seen);
 }
 
+/**
+ * Intersects primitive type sets while treating integer as a subtype of number.
+ * An empty result means the constraints cannot describe any value of a known type.
+ * Why: The intersection is needed to reject impossible `allOf` combinations while preserving the valid number/integer relationship.
+ */
 function intersectSchemaTypes(typeSets: string[][]): string[] {
   if (typeSets.length === 0) {
     return [];
@@ -720,63 +859,343 @@ function intersectSchemaTypes(typeSets: string[][]): string[] {
   return [...intersection];
 }
 
+/**
+ * Combines multiple schemas assigned to the same structural slot, such as a property or array item.
+ * Each input is expanded into alternatives first so the result preserves valid union branches and their reference roots.
+ */
+function combineSchemaValues(
+  values: OpelSchema[],
+  root: OpelSchema,
+  runtime: OpelRuntime
+): OpelSchema {
+  const variants = values.map((value) =>
+    resolveSchemaVariants(value, schemaRootFor(value, root), runtime)
+  );
+  const combined = intersectSchemaAlternatives(variants, root, runtime);
+  const result =
+    combined.length === 1
+      ? combined[0].schema
+      : createUnionSchema(
+          combined.map((item) => item.schema),
+          combined.map((item) => item.root)
+        );
+  rememberSchemaRoot(result, combined[0]?.root ?? root);
+  return result;
+}
+
+/**
+ * Merges one concrete all-of combination into a single schema.
+ * It intersects types and literals, unions required properties, and applies each branch's property, pattern, and additional-property rules before exposing merged members.
+ * Why: Flattening branch properties without their own object constraints can make an otherwise forbidden property appear valid.
+ */
+function mergeSchemaConstraints(
+  schemas: OpelSchema[],
+  root: OpelSchema,
+  runtime: OpelRuntime
+): OpelSchema {
+  if (schemas.includes(false)) {
+    return false;
+  }
+  const constrained = schemas.filter((schema) => schema !== true);
+  if (constrained.length === 0) {
+    return true;
+  }
+
+  const typeSets = constrained.map((schema) =>
+    getSchemaTypes(schema, root, runtime)
+  );
+  if (typeSets.some((types) => types.includes('never'))) {
+    return false;
+  }
+  const knownTypeSets = typeSets.filter((types) => types.length > 0);
+  const intersection = intersectSchemaTypes(knownTypeSets);
+  if (knownTypeSets.length > 1 && intersection.length === 0) {
+    return false;
+  }
+
+  const merged: Record<string, unknown> = {};
+  const nonNullTypes = intersection.filter((type) => type !== 'null');
+  if (nonNullTypes.length > 0) {
+    merged.type = nonNullTypes.length === 1 ? nonNullTypes[0] : nonNullTypes;
+    if (intersection.includes('null')) {
+      merged.nullable = true;
+    }
+  } else if (intersection.includes('null')) {
+    merged.type = 'null';
+  }
+
+  const structuralSchemas = constrained
+    .map((schema) => ({
+      object: schemaObject(schema),
+      root: schemaRootFor(schema, root),
+    }))
+    .filter(
+      (entry): entry is { object: Record<string, unknown>; root: OpelSchema } =>
+        entry.object !== null
+    );
+  const properties: Record<string, OpelSchema> = {};
+  const required = new Set<string>();
+  const patterns: Record<string, OpelSchema> = {};
+  let hasAdditionalProperties = false;
+  let additionalProperties: boolean | OpelSchema = true;
+  const itemSchemas: OpelSchema[] = [];
+
+  for (const { object } of structuralSchemas) {
+    if (Array.isArray(object.required)) {
+      for (const name of object.required) {
+        if (typeof name === 'string') {
+          required.add(name);
+        }
+      }
+    }
+  }
+
+  const propertySources = structuralSchemas.filter(
+    ({ object }) =>
+      isRecord(object.properties) || isRecord(object.patternProperties)
+  );
+  const propertyNames = new Set<string>();
+  for (const { object } of propertySources) {
+    if (isRecord(object.properties)) {
+      Object.keys(object.properties).forEach((name) => propertyNames.add(name));
+    }
+  }
+  for (const name of propertyNames) {
+    const constraints: OpelSchema[] = [];
+    let forbidden = false;
+    for (const { object, root: branchRoot } of propertySources) {
+      const explicit = isRecord(object.properties)
+        ? object.properties[name]
+        : undefined;
+      const patterns = matchingPatternProperties(object, name);
+      if (explicit !== undefined) {
+        const child = explicit as OpelSchema;
+        rememberSchemaRoot(child, schemaRootFor(child, branchRoot));
+        constraints.push(child);
+      } else if (patterns.length > 0) {
+        for (const pattern of patterns) {
+          rememberSchemaRoot(pattern, schemaRootFor(pattern, branchRoot));
+          constraints.push(pattern);
+        }
+      } else if (object.additionalProperties === false) {
+        forbidden = true;
+        break;
+      } else if (
+        object.additionalProperties &&
+        object.additionalProperties !== true
+      ) {
+        const extra = object.additionalProperties as OpelSchema;
+        rememberSchemaRoot(extra, schemaRootFor(extra, branchRoot));
+        constraints.push(extra);
+      }
+    }
+    if (!forbidden && constraints.length > 0) {
+      const combined = combineSchemaValues(constraints, root, runtime);
+      if (combined !== false) {
+        properties[name] = combined;
+      }
+    }
+  }
+
+  for (const { object, root: structuralRoot } of structuralSchemas) {
+    if ('items' in object && object.items !== undefined) {
+      const items = object.items as OpelSchema;
+      rememberSchemaRoot(items, structuralRoot);
+      itemSchemas.push(items);
+    }
+    if (isRecord(object.patternProperties)) {
+      for (const [pattern, value] of Object.entries(object.patternProperties)) {
+        const child = value as OpelSchema;
+        const childRoot = schemaRootFor(child, structuralRoot);
+        rememberSchemaRoot(child, childRoot);
+        patterns[pattern] = patterns[pattern]
+          ? combineSchemaValues([patterns[pattern], child], root, runtime)
+          : child;
+      }
+    }
+    if ('additionalProperties' in object) {
+      hasAdditionalProperties = true;
+      const value = object.additionalProperties;
+      if (value === false) {
+        additionalProperties = false;
+      } else if (value && value !== true && additionalProperties !== false) {
+        rememberSchemaRoot(value as OpelSchema, structuralRoot);
+        additionalProperties =
+          additionalProperties === true
+            ? (value as OpelSchema)
+            : combineSchemaValues(
+                [additionalProperties as OpelSchema, value as OpelSchema],
+                root,
+                runtime
+              );
+      }
+    }
+  }
+
+  if (required.size > 0) {
+    merged.required = [...required];
+  }
+  if (Object.keys(properties).length > 0) {
+    merged.properties = properties;
+  }
+  if (Object.keys(patterns).length > 0) {
+    merged.patternProperties = patterns;
+  }
+  if (hasAdditionalProperties) {
+    merged.additionalProperties = additionalProperties;
+  }
+  if (itemSchemas.length > 0) {
+    merged.items = combineSchemaValues(itemSchemas, root, runtime);
+  }
+  if (
+    (required.size > 0 ||
+      Object.keys(properties).length > 0 ||
+      Object.keys(patterns).length > 0 ||
+      hasAdditionalProperties) &&
+    !merged.type
+  ) {
+    merged.type = 'object';
+  }
+  if (itemSchemas.length > 0 && !merged.type) {
+    merged.type = 'array';
+  }
+
+  const constValues = constrained
+    .map((schema) => schemaObject(schema)?.const)
+    .filter((value) => value !== undefined);
+  if (
+    constValues.length > 1 &&
+    !constValues.every((value) => literalEqual(value, constValues[0]))
+  ) {
+    return false;
+  }
+  if (constValues.length > 0) {
+    merged.const = constValues[0];
+  }
+
+  const enumValues = constrained
+    .map((schema) => schemaObject(schema)?.enum)
+    .filter((value): value is unknown[] => Array.isArray(value));
+  if (enumValues.length > 0) {
+    let allowed = [...enumValues[0]];
+    for (const values of enumValues.slice(1)) {
+      allowed = allowed.filter((value) =>
+        values.some((candidate) => literalEqual(candidate, value))
+      );
+    }
+    if (constValues.length > 0) {
+      allowed = allowed.filter((value) => literalEqual(value, constValues[0]));
+    }
+    if (allowed.length === 0) {
+      return false;
+    }
+    if (knownTypeSets.length > 0) {
+      allowed = allowed.filter((value) =>
+        intersection.some(
+          (type) =>
+            type === valueType(value) ||
+            (type === 'number' && valueType(value) === 'integer')
+        )
+      );
+    }
+    if (allowed.length === 0) {
+      return false;
+    }
+    if (constValues.length === 0) {
+      merged.enum = allowed;
+    }
+  }
+
+  return merged;
+}
+
+/**
+ * Computes the Cartesian product of branch alternatives and intersects each combination.
+ * Impossible combinations are removed when at least one valid combination remains.
+ */
+function intersectSchemaAlternatives(
+  alternatives: SchemaResolution[][],
+  root: OpelSchema,
+  runtime: OpelRuntime
+): SchemaResolution[] {
+  let combinations: SchemaResolution[][] = [[]];
+  for (const variants of alternatives) {
+    combinations = combinations.flatMap((combination) =>
+      variants.map((variant) => [...combination, variant])
+    );
+  }
+  const merged = combinations.map((combination) => {
+    const effectiveRoot =
+      combination.find((item) => item.schema !== true)?.root ?? root;
+    combination.forEach((item) => rememberSchemaRoot(item.schema, item.root));
+    const schema = mergeSchemaConstraints(
+      combination.map((item) => item.schema),
+      effectiveRoot,
+      runtime
+    );
+    rememberSchemaRoot(schema, effectiveRoot);
+    return { schema, root: effectiveRoot };
+  });
+  const possible = merged.filter((item) => item.schema !== false);
+  return possible.length > 0 ? possible : [{ schema: false, root }];
+}
+
+/**
+ * Resolves references and expands schema composition into the variants semantic analysis can inspect.
+ * `oneOf` and `anyOf` remain unions; `allOf` is combined branch-by-branch with structural constraints merged.
+ * Why: Downstream analysis needs explicit alternatives to distinguish valid union members from contradictory intersections.
+ */
 function resolveSchemaVariants(
   schema: OpelSchema,
   root: OpelSchema,
   runtime: OpelRuntime
-): OpelSchema[] {
+): SchemaResolution[] {
   const resolved = resolveSchemaReference(schema, root, runtime);
-  if (resolved === true || resolved === false) {
+  const object = schemaObject(resolved.schema);
+  if (!object || resolved.schema === true || resolved.schema === false) {
     return [resolved];
   }
-  const object = schemaObject(resolved);
-  if (!object) {
-    return [resolved];
-  }
-  // oneOf/anyOf are static unions here; runtime exclusivity is intentionally not evaluated.
   if (Array.isArray(object.oneOf)) {
-    return object.oneOf.flatMap((child) =>
-      resolveSchemaVariants(child as OpelSchema, root, runtime)
+    const branchRoots = SCHEMA_BRANCH_ROOTS.get(object);
+    return object.oneOf.flatMap((child, index) =>
+      resolveSchemaVariants(
+        child as OpelSchema,
+        branchRoots?.[index] ?? resolved.root,
+        runtime
+      )
     );
   }
   if (Array.isArray(object.anyOf)) {
-    return object.anyOf.flatMap((child) =>
-      resolveSchemaVariants(child as OpelSchema, root, runtime)
+    const branchRoots = SCHEMA_BRANCH_ROOTS.get(object);
+    return object.anyOf.flatMap((child, index) =>
+      resolveSchemaVariants(
+        child as OpelSchema,
+        branchRoots?.[index] ?? resolved.root,
+        runtime
+      )
     );
   }
   if (Array.isArray(object.allOf)) {
-    const branches = object.allOf.flatMap((child) =>
-      resolveSchemaVariants(child as OpelSchema, root, runtime)
+    const branches = object.allOf.map((child) =>
+      resolveSchemaVariants(child as OpelSchema, resolved.root, runtime)
     );
-    const branchTypes = branches.map((branch) =>
-      getSchemaTypes(branch, root, runtime)
-    );
-    if (branchTypes.some((types) => types.includes('never'))) {
-      return [false];
+    const ownConstraints = { ...object };
+    delete ownConstraints.allOf;
+    if (Object.keys(ownConstraints).length > 0) {
+      branches.push([
+        { schema: ownConstraints as OpelSchema, root: resolved.root },
+      ]);
     }
-    const constrainedTypes = branchTypes.filter((types) => types.length > 0);
-    const intersection = intersectSchemaTypes(constrainedTypes);
-    if (constrainedTypes.length > 1 && intersection.length === 0) {
-      return [false];
-    }
-    return [
-      {
-        ...object,
-        allOf: branches,
-        ...(intersection.length > 0
-          ? {
-              type:
-                intersection.length === 1
-                  ? (intersection[0] as OpelPrimitive)
-                  : (intersection as OpelPrimitive[]),
-            }
-          : {}),
-      },
-    ];
+    return intersectSchemaAlternatives(branches, resolved.root, runtime);
   }
   return [resolved];
 }
 
+/**
+ * Extracts the statically known primitive types represented by a schema.
+ * An empty result means the schema is unknown or unconstrained, while `never` marks an impossible schema.
+ * Why: The empty set deliberately means unknown rather than impossible, so incomplete or unconstrained metadata does not create false positives.
+ */
 function getSchemaTypes(
   schema: OpelSchema,
   root: OpelSchema,
@@ -789,7 +1208,8 @@ function getSchemaTypes(
     return ['never'];
   }
   const types = new Set<string>();
-  for (const variant of resolveSchemaVariants(schema, root, runtime)) {
+  for (const resolution of resolveSchemaVariants(schema, root, runtime)) {
+    const variant = resolution.schema;
     if (variant === true) {
       continue;
     }
@@ -806,10 +1226,13 @@ function getSchemaTypes(
       }
     } else if (
       variant.properties ||
+      variant.required ||
       variant.additionalProperties !== undefined ||
       variant.patternProperties
     ) {
       types.add('object');
+    } else if (variant.items !== undefined) {
+      types.add('array');
     } else if (variant.const !== undefined) {
       types.add(valueType(variant.const));
     } else if (variant.enum?.length) {
@@ -821,6 +1244,10 @@ function getSchemaTypes(
   return [...types];
 }
 
+/**
+ * Maps a runtime literal to the OPEL primitive vocabulary.
+ * Integer numbers are kept distinct from other numbers because overloads and arithmetic use that distinction.
+ */
 function valueType(value: unknown): string {
   if (value === null) {
     return 'null';
@@ -834,10 +1261,19 @@ function valueType(value: unknown): string {
   return typeof value;
 }
 
+/**
+ * Formats a literal for schema descriptions and diagnostics.
+ * Strings use JSON quoting; other values use their normal string representation.
+ */
 function quoted(value: unknown): string {
   return typeof value === 'string' ? JSON.stringify(value) : String(value);
 }
 
+/**
+ * Produces a readable type-like description of a schema for diagnostics displayed to users.
+ * It resolves composition, recursively describes properties and items, and stops safely on recursive schemas.
+ * Why: Diagnostics need readable types rather than raw schema objects, especially when users must understand why an expression is rejected.
+ */
 function schemaDescription(
   schema: OpelSchema,
   root: OpelSchema,
@@ -858,18 +1294,20 @@ function schemaDescription(
   const branches = resolveSchemaVariants(schema, root, runtime);
   if (branches.length > 1) {
     return branches
-      .map((branch) => schemaDescription(branch, root, runtime, seen))
+      .map((branch) =>
+        schemaDescription(branch.schema, branch.root, runtime, seen)
+      )
       .join(' | ');
   }
 
   const resolved = branches[0];
-  if (resolved === true) {
+  if (resolved.schema === true) {
     return 'unknown';
   }
-  if (resolved === false) {
+  if (resolved.schema === false) {
     return 'never';
   }
-  const object = schemaObject(resolved);
+  const object = schemaObject(resolved.schema);
   if (!object) {
     return 'unknown';
   }
@@ -927,6 +1365,10 @@ function schemaDescription(
   return 'unknown';
 }
 
+/**
+ * Describes an inferred value using its literal type when available, otherwise its schema description.
+ * Objects and arrays use their schema so their structure is not lost in diagnostics.
+ */
 function valueDescription(value: Value, ctx: SemanticContext): string {
   if (value.literal !== undefined) {
     const type = valueType(value.literal);
@@ -938,6 +1380,11 @@ function valueDescription(value: Value, ctx: SemanticContext): string {
   return schemaDescription(value.schema, schemaRoot(value), ctx.runtime);
 }
 
+/**
+ * Collects property names exposed by all resolvable schema variants.
+ * The names are used to make unknown and partial-union property diagnostics actionable.
+ * Why: Listing known members turns an unknown-property error into an actionable diagnostic without changing semantic validity.
+ */
 function availableProperties(
   schema: OpelSchema,
   ctx: SemanticContext,
@@ -953,6 +1400,11 @@ function availableProperties(
   return [...names].sort();
 }
 
+/**
+ * Collects methods registered for every possible receiver type.
+ * Integer receivers also inherit methods configured for numbers.
+ * Why: Including inherited number methods makes suggestions match the actual receiver dispatch rules for integers.
+ */
 function availableMethods(receiver: Value, ctx: SemanticContext): string[] {
   const names = new Set<string>();
   for (const type of getSchemaTypes(
@@ -973,12 +1425,87 @@ function availableMethods(receiver: Value, ctx: SemanticContext): string[] {
   return [...names].sort();
 }
 
+/**
+ * Formats a list of candidate names for a diagnostic message.
+ * Empty lists are rendered as `none` instead of an empty string.
+ */
 function formatNames(names: string[]): string {
   return names.length > 0
     ? names.map((name) => `"${name}"`).join(', ')
     : 'none';
 }
 
+/**
+ * Returns whether two pattern domains have a statically plausible overlap.
+ * Exact and simple anchored-prefix cases are decided directly; other valid patterns are treated as potentially overlapping.
+ * Why: Regular-expression intersection is undecidable in general, so compatibility stays conservative for unfamiliar patterns.
+ */
+function patternsMayOverlap(left: string, right: string): boolean {
+  if (left === right) {
+    return true;
+  }
+  const leftPrefix = left.match(/^\^([A-Za-z0-9_-]+)/)?.[1];
+  const rightPrefix = right.match(/^\^([A-Za-z0-9_-]+)/)?.[1];
+  if (
+    leftPrefix &&
+    rightPrefix &&
+    !leftPrefix.startsWith(rightPrefix) &&
+    !rightPrefix.startsWith(leftPrefix)
+  ) {
+    return false;
+  }
+  try {
+    new RegExp(left);
+    new RegExp(right);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Returns whether the target pattern is known to cover the whole source pattern domain.
+ * The check intentionally handles only exact patterns, universal patterns, and anchored literal prefixes.
+ */
+function patternCovers(source: string, target: string): boolean {
+  if (source === target || target === '.*' || target === '^.*$') {
+    return true;
+  }
+  const sourcePrefix = source.match(/^\^([A-Za-z0-9_-]+)/)?.[1];
+  const targetPrefix = target.match(/^\^([A-Za-z0-9_-]+)/)?.[1];
+  return (
+    !!sourcePrefix && !!targetPrefix && sourcePrefix.startsWith(targetPrefix)
+  );
+}
+
+/**
+ * Finds every pattern-property schema whose regular expression matches a property name.
+ * Invalid patterns are ignored here because runtime validation reports them before semantic analysis runs.
+ */
+function matchingPatternProperties(
+  schema: Record<string, unknown>,
+  name: string
+): OpelSchema[] {
+  if (!isRecord(schema.patternProperties)) {
+    return [];
+  }
+  return Object.entries(schema.patternProperties).flatMap(
+    ([pattern, value]) => {
+      try {
+        return new RegExp(pattern).test(name) ? [value as OpelSchema] : [];
+      } catch {
+        // Invalid patterns are handled by runtime validation.
+        return [];
+      }
+    }
+  );
+}
+
+/**
+ * Checks whether at least one resolved schema variant accepts a primitive type.
+ * Integer values may satisfy number schemas, and nullable schemas accept null.
+ * Why: This is the shared primitive gate used before deeper constraint checks, including OPEL’s integer-to-number compatibility.
+ */
 function schemaAllowsType(
   schema: OpelSchema,
   type: string,
@@ -988,14 +1515,15 @@ function schemaAllowsType(
   if (schema === true) {
     return true;
   }
-  return resolveSchemaVariants(schema, root, runtime).some((variant) => {
+  return resolveSchemaVariants(schema, root, runtime).some((resolution) => {
+    const variant = resolution.schema;
     if (variant === true) {
       return true;
     }
     if (variant === false) {
       return false;
     }
-    const types = getSchemaTypes(variant, root, runtime);
+    const types = getSchemaTypes(variant, resolution.root, runtime);
     return (
       types.length === 0 ||
       types.includes(type) ||
@@ -1005,10 +1533,306 @@ function schemaAllowsType(
   });
 }
 
+/**
+ * Compares schema literals structurally using their JSON representation.
+ * This is sufficient for the JSON-like values supported by runtime metadata.
+ */
 function literalEqual(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
+type SchemaPair = readonly [OpelSchema, OpelSchema];
+
+/**
+ * Checks whether every known value described by a source schema is accepted by a target schema.
+ * It compares union alternatives independently and tracks visited schema pairs to terminate recursive graphs.
+ * Why: Non-literal values still carry useful schema knowledge, so rejecting incompatible schemas prevents type errors from being hidden just because no literal is present.
+ */
+function isSchemaCompatible(
+  sourceSchema: OpelSchema,
+  targetSchema: OpelSchema,
+  sourceRoot: OpelSchema,
+  targetRoot: OpelSchema,
+  runtime: OpelRuntime,
+  seen: SchemaPair[] = []
+): boolean {
+  if (sourceSchema === true || targetSchema === true) {
+    return true;
+  }
+  if (sourceSchema === false || targetSchema === false) {
+    return false;
+  }
+  if (
+    seen.some(
+      ([source, target]) => source === sourceSchema && target === targetSchema
+    )
+  ) {
+    return true;
+  }
+
+  const sourceVariants = resolveSchemaVariants(
+    sourceSchema,
+    sourceRoot,
+    runtime
+  );
+  const targetVariants = resolveSchemaVariants(
+    targetSchema,
+    targetRoot,
+    runtime
+  );
+  const nextSeen = [...seen, [sourceSchema, targetSchema] as const];
+  return sourceVariants.every((sourceVariant) =>
+    targetVariants.some((targetVariant) =>
+      isSchemaVariantCompatible(
+        sourceVariant.schema,
+        targetVariant.schema,
+        sourceVariant.root,
+        targetVariant.root,
+        runtime,
+        nextSeen
+      )
+    )
+  );
+}
+
+/**
+ * Compares one resolved source variant with one resolved target variant.
+ * Besides primitive types, it checks constants, enums, object properties, required fields, pattern domains, additional properties, and array items.
+ * Why: Comparing known structural constraints catches errors that primitive type comparison alone cannot see.
+ */
+function isSchemaVariantCompatible(
+  sourceSchema: OpelSchema,
+  targetSchema: OpelSchema,
+  sourceRoot: OpelSchema,
+  targetRoot: OpelSchema,
+  runtime: OpelRuntime,
+  seen: SchemaPair[]
+): boolean {
+  if (sourceSchema === true || targetSchema === true) {
+    return true;
+  }
+  if (sourceSchema === false || targetSchema === false) {
+    return false;
+  }
+
+  const sourceTypes = getSchemaTypes(sourceSchema, sourceRoot, runtime).filter(
+    (type) => type !== 'never'
+  );
+  const targetTypes = getSchemaTypes(targetSchema, targetRoot, runtime).filter(
+    (type) => type !== 'never'
+  );
+  if (
+    sourceTypes.length > 0 &&
+    targetTypes.length > 0 &&
+    !sourceTypes.every(
+      (type) =>
+        targetTypes.includes(type) ||
+        (type === 'integer' && targetTypes.includes('number'))
+    )
+  ) {
+    return false;
+  }
+
+  const sourceObject = schemaObject(sourceSchema);
+  const targetObject = schemaObject(targetSchema);
+  if (!sourceObject || !targetObject) {
+    return true;
+  }
+
+  if (
+    (targetObject.const !== undefined || Array.isArray(targetObject.enum)) &&
+    sourceObject.const === undefined &&
+    !Array.isArray(sourceObject.enum)
+  ) {
+    return sourceTypes.length === 0;
+  }
+
+  if (sourceObject.const !== undefined) {
+    return isValueCompatibleWithSchema(
+      {
+        schema: { type: valueType(sourceObject.const) as OpelPrimitive },
+        literal: sourceObject.const,
+      },
+      targetSchema,
+      targetRoot,
+      runtime
+    );
+  }
+  if (Array.isArray(sourceObject.enum)) {
+    return sourceObject.enum.every((value) =>
+      isValueCompatibleWithSchema(
+        { schema: { type: valueType(value) as OpelPrimitive }, literal: value },
+        targetSchema,
+        targetRoot,
+        runtime
+      )
+    );
+  }
+
+  const sourceProperties = isRecord(sourceObject.properties)
+    ? sourceObject.properties
+    : {};
+  const targetProperties = isRecord(targetObject.properties)
+    ? targetObject.properties
+    : {};
+  const sourceRequired = new Set(
+    Array.isArray(sourceObject.required)
+      ? sourceObject.required.filter(
+          (name): name is string => typeof name === 'string'
+        )
+      : []
+  );
+  const targetRequired = Array.isArray(targetObject.required)
+    ? targetObject.required.filter(
+        (name): name is string => typeof name === 'string'
+      )
+    : [];
+
+  for (const name of targetRequired) {
+    if (!sourceRequired.has(name)) {
+      return false;
+    }
+  }
+  for (const [name, sourceProperty] of Object.entries(sourceProperties)) {
+    const targetPropertiesForName = [
+      ...(name in targetProperties
+        ? [targetProperties[name] as OpelSchema]
+        : []),
+      ...matchingPatternProperties(targetObject, name),
+    ];
+    if (targetPropertiesForName.length > 0) {
+      if (
+        !targetPropertiesForName.every((targetProperty) =>
+          isSchemaCompatible(
+            sourceProperty as OpelSchema,
+            targetProperty,
+            schemaRootFor(sourceProperty as OpelSchema, sourceRoot),
+            targetRoot,
+            runtime,
+            seen
+          )
+        )
+      ) {
+        return false;
+      }
+    } else if (targetObject.additionalProperties === false) {
+      return false;
+    } else if (
+      targetObject.additionalProperties &&
+      targetObject.additionalProperties !== true &&
+      !isSchemaCompatible(
+        sourceProperty as OpelSchema,
+        targetObject.additionalProperties as OpelSchema,
+        sourceRoot,
+        targetRoot,
+        runtime,
+        seen
+      )
+    ) {
+      return false;
+    }
+  }
+
+  const sourcePatterns = isRecord(sourceObject.patternProperties)
+    ? Object.entries(sourceObject.patternProperties)
+    : [];
+  const targetPatterns = isRecord(targetObject.patternProperties)
+    ? Object.entries(targetObject.patternProperties)
+    : [];
+  for (const [sourcePattern, sourcePatternSchema] of sourcePatterns) {
+    const overlappingTargets = targetPatterns.filter(([targetPattern]) =>
+      patternsMayOverlap(sourcePattern, targetPattern)
+    );
+    for (const [, targetPatternSchema] of overlappingTargets) {
+      if (
+        !isSchemaCompatible(
+          sourcePatternSchema as OpelSchema,
+          targetPatternSchema as OpelSchema,
+          schemaRootFor(sourcePatternSchema as OpelSchema, sourceRoot),
+          targetRoot,
+          runtime,
+          seen
+        )
+      ) {
+        return false;
+      }
+    }
+    const coveredByTargetPattern = overlappingTargets.some(([targetPattern]) =>
+      patternCovers(sourcePattern, targetPattern)
+    );
+    if (
+      !coveredByTargetPattern &&
+      targetObject.additionalProperties === false
+    ) {
+      return false;
+    }
+    if (
+      !coveredByTargetPattern &&
+      targetObject.additionalProperties &&
+      targetObject.additionalProperties !== true &&
+      !isSchemaCompatible(
+        sourcePatternSchema as OpelSchema,
+        targetObject.additionalProperties as OpelSchema,
+        schemaRootFor(sourcePatternSchema as OpelSchema, sourceRoot),
+        targetRoot,
+        runtime,
+        seen
+      )
+    ) {
+      return false;
+    }
+  }
+
+  if (
+    targetObject.additionalProperties === false &&
+    sourceObject.additionalProperties !== false
+  ) {
+    return false;
+  }
+  if (
+    targetObject.additionalProperties &&
+    targetObject.additionalProperties !== true &&
+    (sourceObject.additionalProperties === undefined ||
+      sourceObject.additionalProperties === true)
+  ) {
+    return false;
+  }
+
+  if (
+    targetObject.additionalProperties &&
+    targetObject.additionalProperties !== true &&
+    sourceObject.additionalProperties &&
+    sourceObject.additionalProperties !== true &&
+    !isSchemaCompatible(
+      sourceObject.additionalProperties as OpelSchema,
+      targetObject.additionalProperties as OpelSchema,
+      sourceRoot,
+      targetRoot,
+      runtime,
+      seen
+    )
+  ) {
+    return false;
+  }
+
+  const sourceItems = sourceObject.items as OpelSchema | undefined;
+  const targetItems = targetObject.items as OpelSchema | undefined;
+  return !sourceItems || !targetItems
+    ? true
+    : isSchemaCompatible(
+        sourceItems,
+        targetItems,
+        sourceRoot,
+        targetRoot,
+        runtime,
+        seen
+      );
+}
+
+/**
+ * Adapts schema-to-schema compatibility to the non-literal argument path.
+ * Literal-only checks are intentionally handled by `isValueCompatibleWithSchema` instead.
+ */
 function isInferredSchemaCompatible(
   sourceSchema: OpelSchema,
   targetSchema: OpelSchema,
@@ -1016,32 +1840,20 @@ function isInferredSchemaCompatible(
   targetRoot: OpelSchema,
   runtime: OpelRuntime
 ): boolean {
-  if (sourceSchema === true) {
-    return true;
-  }
-  if (sourceSchema === false) {
-    return false;
-  }
-  const sourceTypes = getSchemaTypes(sourceSchema, sourceRoot, runtime);
-  if (sourceTypes.includes('never')) {
-    return false;
-  }
-  if (sourceTypes.length === 0) {
-    return true;
-  }
-  return sourceTypes.every((sourceType) =>
-    resolveSchemaVariants(targetSchema, targetRoot, runtime).some((variant) => {
-      if (variant === true) {
-        return true;
-      }
-      return (
-        variant !== false &&
-        schemaAllowsType(variant, sourceType, targetRoot, runtime)
-      );
-    })
+  return isSchemaCompatible(
+    sourceSchema,
+    targetSchema,
+    sourceRoot,
+    targetRoot,
+    runtime
   );
 }
 
+/**
+ * Determines whether an inferred argument can satisfy a parameter schema.
+ * Concrete literals get exact const, enum, object, and item checks; non-literals use recursive schema compatibility.
+ * Why: Literal and non-literal values need different checks: literals can prove exact constraints, while schemas can only prove compatibility.
+ */
 function isValueCompatibleWithSchema(
   value: Value,
   schema: OpelSchema,
@@ -1063,7 +1875,8 @@ function isValueCompatibleWithSchema(
       runtime
     );
   }
-  for (const variant of resolveSchemaVariants(schema, root, runtime)) {
+  for (const resolution of resolveSchemaVariants(schema, root, runtime)) {
+    const variant = resolution.schema;
     if (variant === true) {
       return true;
     }
@@ -1083,12 +1896,12 @@ function isValueCompatibleWithSchema(
       continue;
     }
     const type = valueType(value.literal);
-    if (!schemaAllowsType(variant, type, root, runtime)) {
+    if (!schemaAllowsType(variant, type, resolution.root, runtime)) {
       continue;
     }
     if (
       type === 'object' &&
-      !isObjectCompatibleWithSchema(value, variant, root, runtime)
+      !isObjectCompatibleWithSchema(value, variant, resolution.root, runtime)
     ) {
       continue;
     }
@@ -1100,7 +1913,7 @@ function isValueCompatibleWithSchema(
         isValueCompatibleWithSchema(
           { schema: { type: valueType(item) as never }, literal: item },
           variant.items as OpelSchema,
-          root,
+          resolution.root,
           runtime
         )
       )
@@ -1112,6 +1925,11 @@ function isValueCompatibleWithSchema(
   return false;
 }
 
+/**
+ * Checks a known object literal against required properties, declared property schemas, and closed-object rules.
+ * Unknown object values are left permissive because their runtime members are not statically available.
+ * Why: The permissive fallback avoids claiming an unknown object is invalid while still enforcing constraints on object literals whose members are known.
+ */
 function isObjectCompatibleWithSchema(
   value: Value,
   schema: Record<string, unknown>,
@@ -1128,24 +1946,46 @@ function isObjectCompatibleWithSchema(
     return false;
   }
   for (const [name, child] of Object.entries(literal)) {
+    const propertySchemas = [
+      ...(name in properties ? [properties[name] as OpelSchema] : []),
+      ...matchingPatternProperties(schema, name),
+    ];
     if (
-      name in properties &&
+      !propertySchemas.every((propertySchema) =>
+        isValueCompatibleWithSchema(
+          { schema: child as OpelSchema, literal: child },
+          propertySchema,
+          root,
+          runtime
+        )
+      )
+    ) {
+      return false;
+    }
+    if (propertySchemas.length === 0 && schema.additionalProperties === false) {
+      return false;
+    }
+    if (
+      propertySchemas.length === 0 &&
+      schema.additionalProperties &&
+      schema.additionalProperties !== true &&
       !isValueCompatibleWithSchema(
         { schema: child as OpelSchema, literal: child },
-        properties[name] as OpelSchema,
+        schema.additionalProperties as OpelSchema,
         root,
         runtime
       )
     ) {
       return false;
     }
-    if (!(name in properties) && schema.additionalProperties === false) {
-      return false;
-    }
   }
   return true;
 }
 
+/**
+ * Parses literal syntax nodes into JavaScript values used by semantic checks.
+ * It handles strings, numbers, and the OPEL boolean and null literals.
+ */
 function readLiteralValue(
   node: SyntaxNode,
   source: string
@@ -1186,10 +2026,19 @@ function readLiteralValue(
   return { hasLiteralValue: false };
 }
 
+/**
+ * Returns all direct children that represent expression nodes in the grammar.
+ * Keeping the node-name set here avoids repeating the grammar traversal list.
+ */
 function expressionChildren(node: SyntaxNode): SyntaxNode[] {
   return [...EXPRESSION_NODES].flatMap((name) => node.getChildren(name));
 }
 
+/**
+ * Emits a deprecation warning once for a particular source range and message.
+ * The set prevents repeated warnings when the same member is inspected by multiple semantic passes.
+ * Why: Member resolution can encounter the same deprecated declaration through multiple paths, but authors should see one warning per use.
+ */
 function addDeprecation(
   ctx: SemanticContext,
   node: SyntaxNode,
@@ -1211,10 +2060,18 @@ function addDeprecation(
   );
 }
 
+/**
+ * Wraps a callable in the generic inferred-value shape.
+ * Callables start with an unknown schema because invoking them is what determines their return schema.
+ */
 function callableValue(callable: Callable): Value {
   return { schema: true, callable };
 }
 
+/**
+ * Builds a focused diagnostic for known object-literal constraint failures.
+ * It reports the first missing required property or the first extra property on a closed object.
+ */
 function objectConstraintMessage(
   value: Value,
   schema: OpelSchema,
@@ -1242,6 +2099,10 @@ function objectConstraintMessage(
   return null;
 }
 
+/**
+ * Summarizes the accepted argument counts across callable signatures.
+ * Required and optional trailing parameters become a compact range for arity diagnostics.
+ */
 function expectedArity(signatures: readonly OpelSignature[]): string {
   const ranges = signatures.map((signature) => {
     const required = signature.parameters.filter(
@@ -1259,12 +2120,16 @@ function expectedArity(signatures: readonly OpelSignature[]): string {
   return `Expected one of ${uniqueRanges.map((range) => range.replace('-', ' to ')).join(', ')} arguments`;
 }
 
+/**
+ * Filters callable signatures by arity and recursive argument-schema compatibility, then infers the return value.
+ * Complete calls report mismatch or ambiguity diagnostics; incomplete calls remain permissive while the user is typing.
+ * Why: Filtering signatures before selecting a return schema prevents invalid overloads from contaminating inference and diagnostics.
+ */
 function analyzeCall(
   callable: Callable,
   args: Value[],
   node: SyntaxNode,
   ctx: SemanticContext,
-  root: OpelSchema,
   argNodes: SyntaxNode[] = []
 ): Value {
   const arityCompatible = callable.signatures.filter((signature) => {
@@ -1282,7 +2147,7 @@ function analyzeCall(
         isValueCompatibleWithSchema(
           args[index],
           parameter.schema,
-          root,
+          parameter.schema,
           ctx.runtime
         )
     )
@@ -1302,7 +2167,7 @@ function analyzeCall(
             !isValueCompatibleWithSchema(
               args[index],
               arityCompatible[0].parameters[index].schema,
-              root,
+              arityCompatible[0].parameters[index].schema,
               ctx.runtime
             )
         );
@@ -1311,7 +2176,7 @@ function analyzeCall(
             !isValueCompatibleWithSchema(
               args[index],
               arityCompatible[0].parameters[index].schema,
-              root,
+              arityCompatible[0].parameters[index].schema,
               ctx.runtime
             )
         );
@@ -1356,6 +2221,10 @@ function analyzeCall(
   return { schema: resultSchema, root: resultSchema };
 }
 
+/**
+ * Creates an unknown-symbol diagnostic and optionally suggests nearby local or runtime names.
+ * Candidate names are collected from the current environment and configured runtime entries.
+ */
 function unknownRuntimeSymbolMessage(
   name: string,
   env: Environment,
@@ -1376,6 +2245,11 @@ function unknownRuntimeSymbolMessage(
   return message.join(' ');
 }
 
+/**
+ * Resolves an identifier in lexical scope before checking runtime globals and functions.
+ * Unresolved names produce one semantic diagnostic unless declaration-order analysis already owns that source position.
+ * Why: Local-first lookup preserves shadowing and prevents a runtime global or function from masking an editor declaration.
+ */
 function resolveIdentifier(
   name: string,
   node: SyntaxNode,
@@ -1388,7 +2262,7 @@ function resolveIdentifier(
   }
   const schema = ctx.runtime.globals?.[name];
   if (schema !== undefined) {
-    return { schema, runtime: true };
+    return { schema, root: schema, runtime: true };
   }
   if (ctx.runtime.functions?.[name]) {
     return callableValue({ ...ctx.runtime.functions[name], isLocal: false });
@@ -1404,6 +2278,11 @@ function resolveIdentifier(
   return { schema: true, error: true };
 }
 
+/**
+ * Finds a method by the receiver's possible primitive types in receiver precedence order.
+ * Integer receivers try integer methods first and then inherit number methods.
+ * Why: The ordered lookup mirrors runtime dispatch, including the intentional integer-to-number method inheritance.
+ */
 function resolveMethod(
   receiver: Value,
   name: string,
@@ -1431,6 +2310,11 @@ function resolveMethod(
   return null;
 }
 
+/**
+ * Resolves a property across all receiver schema variants while preserving the reference root.
+ * It combines direct, pattern, and additional properties and reports absent or partial union members.
+ * Why: Analyzing every variant is necessary to distinguish a property that is absent from one union member from one absent everywhere.
+ */
 function resolvePropertyAccess(
   receiver: Value,
   name: string,
@@ -1443,11 +2327,12 @@ function resolvePropertyAccess(
   const supports: Value[] = [];
   let unsupported = 0;
   const receiverRoot = schemaRoot(receiver);
-  for (const variant of resolveSchemaVariants(
+  for (const resolution of resolveSchemaVariants(
     receiver.schema,
     receiverRoot,
     ctx.runtime
   )) {
+    const variant = resolution.schema;
     if (variant === true) {
       continue;
     }
@@ -1457,32 +2342,32 @@ function resolvePropertyAccess(
       continue;
     }
     const properties = isRecord(object.properties) ? object.properties : {};
-    if (name in properties) {
-      const schema = properties[name] as OpelSchema;
+    const propertySchemas = [
+      ...(name in properties ? [properties[name] as OpelSchema] : []),
+      ...matchingPatternProperties(object, name),
+    ];
+    if (propertySchemas.length > 0) {
+      const schema =
+        propertySchemas.length === 1
+          ? propertySchemas[0]
+          : combineSchemaValues(propertySchemas, resolution.root, ctx.runtime);
+      const propertyRoot = schemaRootFor(schema, resolution.root);
       const callable = schemaObject(schema)?.callable as Callable | undefined;
       supports.push({
         schema,
-        root: receiverRoot,
+        root: propertyRoot,
         ...(callable ? { callable } : {}),
       });
       addDeprecation(
         ctx,
         node,
-        schemaObject(schema)?.deprecated as boolean | string | undefined
+        name in properties
+          ? (schemaObject(properties[name] as OpelSchema)?.deprecated as
+              | boolean
+              | string
+              | undefined)
+          : undefined
       );
-      continue;
-    }
-    const pattern =
-      isRecord(object.patternProperties) &&
-      Object.entries(object.patternProperties).find(([pattern]) => {
-        try {
-          return new RegExp(pattern).test(name);
-        } catch {
-          return false;
-        }
-      });
-    if (pattern) {
-      supports.push({ schema: pattern[1] as OpelSchema, root: receiverRoot });
       continue;
     }
     if (object.additionalProperties === false) {
@@ -1493,17 +2378,18 @@ function resolvePropertyAccess(
         isRecord(object.patternProperties) ||
         object.additionalProperties !== undefined;
       if (!hasPropertyRules) {
-        supports.push({ schema: true, root: receiverRoot });
+        supports.push({ schema: true, root: resolution.root });
       } else {
         if (object.additionalProperties === undefined) {
           unsupported++;
         }
+        const schema =
+          object.additionalProperties && object.additionalProperties !== true
+            ? (object.additionalProperties as OpelSchema)
+            : true;
         supports.push({
-          schema:
-            object.additionalProperties && object.additionalProperties !== true
-              ? (object.additionalProperties as OpelSchema)
-              : true,
-          root: receiverRoot,
+          schema,
+          root: schemaRootFor(schema, resolution.root),
         });
       }
     }
@@ -1525,8 +2411,11 @@ function resolvePropertyAccess(
   }
   const callable = supports.length === 1 ? supports[0].callable : undefined;
   return {
-    schema: createUnionSchema(supports.map((value) => value.schema)),
-    root: receiverRoot,
+    schema: createUnionSchema(
+      supports.map((value) => value.schema),
+      supports.map((value) => schemaRoot(value))
+    ),
+    root: supports[0]?.root ?? receiverRoot,
     ...(callable ? { callable } : {}),
   };
 }

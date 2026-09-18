@@ -160,7 +160,7 @@ function validateSchema(
       validateSchema(
         schemas[schema.$ref],
         `${path}/$ref`,
-        root,
+        schemas[schema.$ref] as Record<string, unknown>,
         schemas,
         issues,
         active
@@ -373,19 +373,35 @@ function validateCallable(
   });
 }
 
+/**
+ * Clones and validates caller metadata before exposing an immutable runtime snapshot.
+ * Only `undefined` means no runtime; every other root must be cloneable and object-shaped.
+ * Why: Treating invalid roots as an empty runtime keeps linting safe without silently accepting malformed configuration.
+ */
 export function createRuntimeContext(
   input: OpelRuntime | undefined,
   onIssues?: (issues: readonly OpelRuntimeIssue[]) => void
 ): RuntimeContext {
-  if (!input) {
+  if (input === undefined) {
     return { runtime: EMPTY_RUNTIME };
   }
-  const runtime = structuredClone(input) as Record<string, unknown>;
   const issues: OpelRuntimeIssue[] = [];
+  let runtime: unknown;
+  try {
+    runtime = structuredClone(input);
+  } catch {
+    issues.push(
+      issue('invalid-runtime-entry', '/', 'runtime must be a cloneable object')
+    );
+    onIssues?.(issues);
+    return { runtime: EMPTY_RUNTIME };
+  }
   if (!isRecord(runtime)) {
     issues.push(
       issue('invalid-runtime-entry', '/', 'runtime must be an object')
     );
+    onIssues?.(issues);
+    return { runtime: EMPTY_RUNTIME };
   }
 
   const globals = isRecord(runtime.globals) ? runtime.globals : {};

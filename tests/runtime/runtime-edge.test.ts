@@ -40,6 +40,47 @@ describe('runtime semantic edge cases', () => {
     expect(issues).toHaveLength(0);
   });
 
+  it('resolves local references inside external schemas against the external root', () => {
+    const issues: { code: string }[] = [];
+    lint('user.name', {
+      runtime: {
+        schemas: {
+          'catalog/user/1.0': {
+            type: 'object',
+            definitions: { Name: { type: 'string' } },
+            properties: { name: { $ref: '#/definitions/Name' } },
+          },
+        },
+        globals: { user: { $ref: 'catalog/user/1.0' } },
+      },
+      onRuntimeIssues: (next) => issues.push(...next),
+    });
+
+    expect(issues).toHaveLength(0);
+  });
+
+  it('preserves external schema roots through derived property access', () => {
+    const diagnostics = lint('user.child.name', {
+      runtime: {
+        schemas: {
+          'catalog/user/1.0': {
+            type: 'object',
+            definitions: {
+              Child: {
+                type: 'object',
+                properties: { name: { type: 'string' } },
+              },
+            },
+            properties: { child: { $ref: '#/definitions/Child' } },
+          },
+        },
+        globals: { user: { $ref: 'catalog/user/1.0' } },
+      },
+    });
+
+    expect(diagnostics).toHaveLength(0);
+  });
+
   it('disables the whole runtime for an unresolved reachable reference', () => {
     const issues: { code: string }[] = [];
     const diagnostics = lint('user', {
@@ -54,6 +95,20 @@ describe('runtime semantic edge cases', () => {
         diagnostic.message.includes('Unknown symbol')
       )
     ).toBe(true);
+  });
+
+  it('reports invalid primitive runtime roots without throwing', () => {
+    const issues: { code: string }[] = [];
+
+    expect(() =>
+      lint('value', {
+        runtime: true as never,
+        onRuntimeIssues: (next) => issues.push(...next),
+      })
+    ).not.toThrow();
+    expect(issues.some((issue) => issue.code === 'invalid-runtime-entry')).toBe(
+      true
+    );
   });
 
   it('reports malformed items and additionalProperties schemas', () => {
@@ -80,6 +135,131 @@ describe('runtime semantic edge cases', () => {
         )
       ).toBe(true);
     }
+  });
+
+  it('decodes escaped local reference segments during semantic analysis', () => {
+    const diagnostics = lint('value.name', {
+      runtime: {
+        globals: {
+          value: {
+            type: 'object',
+            definitions: {
+              'a/b': {
+                type: 'object',
+                properties: { name: { type: 'string' } },
+              },
+            },
+            properties: { name: { $ref: '#/definitions/a~1b' } },
+          },
+        },
+      },
+    });
+
+    expect(diagnostics).toHaveLength(0);
+  });
+
+  it('preserves external roots through inferred lists, objects, and allOf', () => {
+    const diagnostics = [
+      ...lint('acceptInteger(items[0].name)', {
+        runtime: {
+          schemas: {
+            'catalog/items': {
+              type: 'array',
+              definitions: {
+                Item: {
+                  type: 'object',
+                  properties: { name: { type: 'string' } },
+                },
+              },
+              items: { $ref: '#/definitions/Item' },
+            },
+          },
+          globals: { items: { $ref: 'catalog/items' } },
+          functions: {
+            acceptInteger: {
+              signatures: [
+                {
+                  parameters: [{ schema: { type: 'integer' } }],
+                  returns: true,
+                },
+              ],
+            },
+          },
+        },
+      }),
+      ...lint('({child: user.child}).child.name', {
+        runtime: {
+          schemas: {
+            'catalog/user': {
+              type: 'object',
+              definitions: {
+                Child: {
+                  type: 'object',
+                  properties: { name: { type: 'string' } },
+                },
+              },
+              properties: { child: { $ref: '#/definitions/Child' } },
+            },
+          },
+          globals: { user: { $ref: 'catalog/user' } },
+        },
+      }),
+      ...lint('value.child.name', {
+        runtime: {
+          schemas: {
+            'catalog/first': {
+              type: 'object',
+              properties: { first: { type: 'string' } },
+            },
+            'catalog/second': {
+              type: 'object',
+              definitions: {
+                Child: {
+                  type: 'object',
+                  properties: { name: { type: 'string' } },
+                },
+              },
+              properties: { child: { $ref: '#/definitions/Child' } },
+            },
+          },
+          globals: {
+            value: {
+              allOf: [{ $ref: 'catalog/first' }, { $ref: 'catalog/second' }],
+            },
+          },
+        },
+      }),
+    ];
+
+    expect(
+      diagnostics.some((diagnostic) => diagnostic.message.includes('argument'))
+    ).toBe(true);
+  });
+
+  it('reports invalid falsy and non-cloneable runtime roots', () => {
+    for (const runtime of [false, null, 0, ''] as never[]) {
+      const issues: { code: string }[] = [];
+      expect(() =>
+        lint('value', {
+          runtime,
+          onRuntimeIssues: (next) => issues.push(...next),
+        })
+      ).not.toThrow();
+      expect(
+        issues.some((issue) => issue.code === 'invalid-runtime-entry')
+      ).toBe(true);
+    }
+
+    const issues: { code: string }[] = [];
+    expect(() =>
+      lint('value', {
+        runtime: (() => undefined) as never,
+        onRuntimeIssues: (next) => issues.push(...next),
+      })
+    ).not.toThrow();
+    expect(issues.some((issue) => issue.code === 'invalid-runtime-entry')).toBe(
+      true
+    );
   });
 
   it('uses strict overloads, optional trailing parameters, and integer number inheritance', () => {

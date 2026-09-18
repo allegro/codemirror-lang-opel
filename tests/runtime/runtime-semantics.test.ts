@@ -226,18 +226,19 @@ describe('runtime-aware semantics', () => {
         },
       },
     };
-    const diagnostics = [
-      ...lint('acceptConst(constValue)', options),
-      ...lint('acceptEnum(enumValue)', options),
-      ...lint('acceptObject(objectValue)', options),
-      ...lint('acceptItems(itemsValue)', options),
-    ];
-
-    expect(
-      diagnostics.filter((diagnostic) =>
-        diagnostic.message.includes('argument')
-      )
-    ).toHaveLength(4);
+    for (const expression of [
+      'acceptConst(constValue)',
+      'acceptEnum(enumValue)',
+      'acceptObject(objectValue)',
+      'acceptItems(itemsValue)',
+    ]) {
+      expect(
+        lint(expression, options).filter((diagnostic) =>
+          diagnostic.message.includes('argument')
+        ),
+        expression
+      ).toHaveLength(1);
+    }
   });
 
   it('preserves allOf alternatives and merged object properties', () => {
@@ -262,22 +263,37 @@ describe('runtime-aware semantics', () => {
         },
       },
     };
-    const diagnostics = [
-      ...lint('value.common', options),
-      ...lint('value.name', options),
-      ...lint('value.id', options),
-    ];
+    const commonDiagnostics = lint('value.common', options);
+    const nameDiagnostics = lint('value.name', options);
+    const idDiagnostics = lint('value.id', options);
 
     expect(
-      diagnostics.filter((diagnostic) =>
+      commonDiagnostics.filter(
+        (diagnostic) =>
+          diagnostic.message.includes('Unknown property') ||
+          diagnostic.message.includes('not available on every member')
+      )
+    ).toHaveLength(0);
+    expect(
+      nameDiagnostics.filter((diagnostic) =>
         diagnostic.message.includes('Unknown property')
       )
     ).toHaveLength(0);
     expect(
-      diagnostics.filter((diagnostic) =>
+      nameDiagnostics.filter((diagnostic) =>
         diagnostic.message.includes('not available on every member')
       )
-    ).toHaveLength(2);
+    ).toHaveLength(1);
+    expect(
+      idDiagnostics.filter((diagnostic) =>
+        diagnostic.message.includes('Unknown property')
+      )
+    ).toHaveLength(0);
+    expect(
+      idDiagnostics.filter((diagnostic) =>
+        diagnostic.message.includes('not available on every member')
+      )
+    ).toHaveLength(1);
   });
 
   it('infers bare object keys and requires present non-literal properties', () => {
@@ -444,119 +460,180 @@ describe('runtime-aware semantics', () => {
   });
 
   it('does not treat unrestricted extra properties as compatible', () => {
-    const diagnostics = [
-      ...lint('acceptClosed(open)', {
-        runtime: {
-          globals: {
-            open: { type: 'object', additionalProperties: true },
-          },
-          functions: {
-            acceptClosed: {
-              signatures: [
-                {
-                  parameters: [
-                    { schema: { type: 'object', additionalProperties: false } },
-                  ],
-                  returns: true,
-                },
-              ],
-            },
+    const closedDiagnostics = lint('acceptClosed(open)', {
+      runtime: {
+        globals: {
+          open: { type: 'object', additionalProperties: true },
+        },
+        functions: {
+          acceptClosed: {
+            signatures: [
+              {
+                parameters: [
+                  { schema: { type: 'object', additionalProperties: false } },
+                ],
+                returns: true,
+              },
+            ],
           },
         },
-      }),
-      ...lint('acceptTyped(open)', {
-        runtime: {
-          globals: {
-            open: { type: 'object', additionalProperties: true },
-          },
-          functions: {
-            acceptTyped: {
-              signatures: [
-                {
-                  parameters: [
-                    {
-                      schema: {
-                        type: 'object',
-                        additionalProperties: { type: 'string' },
-                      },
-                    },
-                  ],
-                  returns: true,
-                },
-              ],
-            },
-          },
-        },
-      }),
-    ];
-
+      },
+    });
     expect(
-      diagnostics.filter((diagnostic) =>
+      closedDiagnostics.filter((diagnostic) =>
         diagnostic.message.includes('argument')
       )
-    ).toHaveLength(2);
+    ).toHaveLength(1);
+
+    const typedDiagnostics = lint('acceptTyped(open)', {
+      runtime: {
+        globals: {
+          open: { type: 'object', additionalProperties: true },
+        },
+        functions: {
+          acceptTyped: {
+            signatures: [
+              {
+                parameters: [
+                  {
+                    schema: {
+                      type: 'object',
+                      additionalProperties: { type: 'string' },
+                    },
+                  },
+                ],
+                returns: true,
+              },
+            ],
+          },
+        },
+      },
+    });
+    expect(
+      typedDiagnostics.filter((diagnostic) =>
+        diagnostic.message.includes('argument')
+      )
+    ).toHaveLength(1);
   });
 
   it('keeps branch-specific additional property constraints in allOf', () => {
-    const diagnostics = [
-      ...lint('closedValue.extra', {
-        runtime: {
-          globals: {
-            closedValue: {
-              allOf: [
-                {
-                  type: 'object',
-                  properties: { known: { type: 'string' } },
-                  additionalProperties: false,
-                },
-                {
-                  type: 'object',
-                  properties: { extra: { type: 'integer' } },
-                },
-              ],
-            },
+    const patternPropertyDiagnostics = lint('acceptPatternProperty(source)', {
+      runtime: {
+        globals: {
+          source: {
+            type: 'object',
+            patternProperties: { '^x': { type: 'string' } },
           },
         },
-      }),
-      ...lint('acceptInteger(typedValue.extra)', {
-        runtime: {
-          globals: {
-            typedValue: {
-              allOf: [
-                {
-                  type: 'object',
-                  properties: { known: { type: 'string' } },
-                  additionalProperties: { type: 'string' },
-                },
-                {
-                  type: 'object',
-                  properties: { extra: { type: 'integer' } },
-                },
-              ],
-            },
-          },
-          functions: {
-            acceptInteger: {
-              signatures: [
-                {
-                  parameters: [{ schema: { type: 'integer' } }],
-                  returns: true,
-                },
-              ],
-            },
+        functions: {
+          acceptPatternProperty: {
+            signatures: [
+              {
+                parameters: [
+                  {
+                    schema: {
+                      type: 'object',
+                      properties: { x: { type: 'integer' } },
+                    },
+                  },
+                ],
+                returns: true,
+              },
+            ],
           },
         },
-      }),
-    ];
-
+      },
+    });
     expect(
-      diagnostics.some((diagnostic) =>
+      patternPropertyDiagnostics.filter((diagnostic) =>
+        diagnostic.message.includes('argument')
+      )
+    ).toHaveLength(1);
+
+    const extraDiagnostics = lint('acceptExtra(source)', {
+      runtime: {
+        globals: {
+          source: {
+            type: 'object',
+            additionalProperties: { type: 'string' },
+          },
+        },
+        functions: {
+          acceptExtra: {
+            signatures: [
+              {
+                parameters: [
+                  {
+                    schema: {
+                      type: 'object',
+                      properties: { x: { type: 'integer' } },
+                    },
+                  },
+                ],
+                returns: true,
+              },
+            ],
+          },
+        },
+      },
+    });
+    expect(
+      extraDiagnostics.filter((diagnostic) =>
+        diagnostic.message.includes('argument')
+      )
+    ).toHaveLength(1);
+
+    const closedDiagnostics = lint('closedValue.extra', {
+      runtime: {
+        globals: {
+          closedValue: {
+            allOf: [
+              { additionalProperties: false },
+              {
+                type: 'object',
+                properties: { extra: { type: 'integer' } },
+              },
+            ],
+          },
+        },
+      },
+    });
+    expect(
+      closedDiagnostics.filter((diagnostic) =>
         diagnostic.message.includes('Unknown property')
       )
-    ).toBe(true);
+    ).toHaveLength(1);
+
+    const typedDiagnostics = lint('acceptInteger(typedValue.extra)', {
+      runtime: {
+        globals: {
+          typedValue: {
+            allOf: [
+              { additionalProperties: { type: 'string' } },
+              {
+                type: 'object',
+                properties: { extra: { type: 'integer' } },
+              },
+            ],
+          },
+        },
+        functions: {
+          acceptInteger: {
+            signatures: [
+              {
+                parameters: [{ schema: { type: 'integer' } }],
+                returns: true,
+              },
+            ],
+          },
+        },
+      },
+    });
     expect(
-      diagnostics.some((diagnostic) => diagnostic.message.includes('argument'))
-    ).toBe(true);
+      typedDiagnostics.filter((diagnostic) =>
+        diagnostic.message.includes('argument')
+      )
+    ).toHaveLength(1);
   });
 
   it('checks source pattern properties against target patterns', () => {

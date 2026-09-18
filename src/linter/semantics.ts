@@ -48,6 +48,7 @@ type Environment = Map<string, Value>;
 
 const SCHEMA_ROOTS = new WeakMap<object, OpelSchema>();
 const SCHEMA_BRANCH_ROOTS = new WeakMap<object, OpelSchema[]>();
+const OWN_SCHEMA_CONSTRAINTS = new WeakSet<object>();
 
 /**
  * Returns the schema document used to resolve local references for a value.
@@ -951,8 +952,7 @@ function mergeSchemaConstraints(
   }
 
   const propertySources = structuralSchemas.filter(
-    ({ object }) =>
-      isRecord(object.properties) || isRecord(object.patternProperties)
+    ({ object }) => !OWN_SCHEMA_CONSTRAINTS.has(object)
   );
   const propertyNames = new Set<string>();
   for (const { object } of propertySources) {
@@ -1182,6 +1182,7 @@ function resolveSchemaVariants(
     const ownConstraints = { ...object };
     delete ownConstraints.allOf;
     if (Object.keys(ownConstraints).length > 0) {
+      OWN_SCHEMA_CONSTRAINTS.add(ownConstraints);
       branches.push([
         { schema: ownConstraints as OpelSchema, root: resolved.root },
       ]);
@@ -1479,6 +1480,17 @@ function patternCovers(source: string, target: string): boolean {
 }
 
 /**
+ * Tests one validated pattern against a concrete property name.
+ */
+function patternMatches(pattern: string, name: string): boolean {
+  try {
+    return new RegExp(pattern).test(name);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Finds every pattern-property schema whose regular expression matches a property name.
  * Invalid patterns are ignored here because runtime validation reports them before semantic analysis runs.
  */
@@ -1491,12 +1503,7 @@ function matchingPatternProperties(
   }
   return Object.entries(schema.patternProperties).flatMap(
     ([pattern, value]) => {
-      try {
-        return new RegExp(pattern).test(name) ? [value as OpelSchema] : [];
-      } catch {
-        // Invalid patterns are handled by runtime validation.
-        return [];
-      }
+      return patternMatches(pattern, name) ? [value as OpelSchema] : [];
     }
   );
 }
@@ -1740,6 +1747,23 @@ function isSchemaVariantCompatible(
     ? Object.entries(targetObject.patternProperties)
     : [];
   for (const [sourcePattern, sourcePatternSchema] of sourcePatterns) {
+    for (const [targetName, targetProperty] of Object.entries(
+      targetProperties
+    )) {
+      if (
+        patternMatches(sourcePattern, targetName) &&
+        !isSchemaCompatible(
+          sourcePatternSchema as OpelSchema,
+          targetProperty as OpelSchema,
+          schemaRootFor(sourcePatternSchema as OpelSchema, sourceRoot),
+          targetRoot,
+          runtime,
+          seen
+        )
+      ) {
+        return false;
+      }
+    }
     const overlappingTargets = targetPatterns.filter(([targetPattern]) =>
       patternsMayOverlap(sourcePattern, targetPattern)
     );
@@ -1780,6 +1804,31 @@ function isSchemaVariantCompatible(
       )
     ) {
       return false;
+    }
+  }
+
+  if (
+    sourceObject.additionalProperties &&
+    sourceObject.additionalProperties !== true &&
+    isRecord(targetObject.properties)
+  ) {
+    for (const [targetName, targetProperty] of Object.entries(
+      targetObject.properties
+    )) {
+      if (
+        !(targetName in sourceProperties) &&
+        matchingPatternProperties(sourceObject, targetName).length === 0 &&
+        !isSchemaCompatible(
+          sourceObject.additionalProperties as OpelSchema,
+          targetProperty as OpelSchema,
+          sourceRoot,
+          targetRoot,
+          runtime,
+          seen
+        )
+      ) {
+        return false;
+      }
     }
   }
 

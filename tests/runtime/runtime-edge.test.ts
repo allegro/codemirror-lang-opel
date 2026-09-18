@@ -159,81 +159,84 @@ describe('runtime semantic edge cases', () => {
   });
 
   it('preserves external roots through inferred lists, objects, and allOf', () => {
-    const diagnostics = [
-      ...lint('acceptInteger(items[0].name)', {
-        runtime: {
-          schemas: {
-            'catalog/items': {
-              type: 'array',
-              definitions: {
-                Item: {
-                  type: 'object',
-                  properties: { name: { type: 'string' } },
-                },
+    const listDiagnostics = lint('acceptInteger(items[0].name)', {
+      runtime: {
+        schemas: {
+          'catalog/items': {
+            type: 'array',
+            definitions: {
+              Item: {
+                type: 'object',
+                properties: { name: { type: 'string' } },
               },
-              items: { $ref: '#/definitions/Item' },
             },
-          },
-          globals: { items: { $ref: 'catalog/items' } },
-          functions: {
-            acceptInteger: {
-              signatures: [
-                {
-                  parameters: [{ schema: { type: 'integer' } }],
-                  returns: true,
-                },
-              ],
-            },
+            items: { $ref: '#/definitions/Item' },
           },
         },
-      }),
-      ...lint('({child: user.child}).child.name', {
-        runtime: {
-          schemas: {
-            'catalog/user': {
-              type: 'object',
-              definitions: {
-                Child: {
-                  type: 'object',
-                  properties: { name: { type: 'string' } },
-                },
+        globals: { items: { $ref: 'catalog/items' } },
+        functions: {
+          acceptInteger: {
+            signatures: [
+              {
+                parameters: [{ schema: { type: 'integer' } }],
+                returns: true,
               },
-              properties: { child: { $ref: '#/definitions/Child' } },
-            },
-          },
-          globals: { user: { $ref: 'catalog/user' } },
-        },
-      }),
-      ...lint('value.child.name', {
-        runtime: {
-          schemas: {
-            'catalog/first': {
-              type: 'object',
-              properties: { first: { type: 'string' } },
-            },
-            'catalog/second': {
-              type: 'object',
-              definitions: {
-                Child: {
-                  type: 'object',
-                  properties: { name: { type: 'string' } },
-                },
-              },
-              properties: { child: { $ref: '#/definitions/Child' } },
-            },
-          },
-          globals: {
-            value: {
-              allOf: [{ $ref: 'catalog/first' }, { $ref: 'catalog/second' }],
-            },
+            ],
           },
         },
-      }),
-    ];
-
+      },
+    });
     expect(
-      diagnostics.some((diagnostic) => diagnostic.message.includes('argument'))
-    ).toBe(true);
+      listDiagnostics.filter((diagnostic) =>
+        diagnostic.message.includes('argument')
+      )
+    ).toHaveLength(1);
+
+    const objectDiagnostics = lint('({child: user.child}).child.name', {
+      runtime: {
+        schemas: {
+          'catalog/user': {
+            type: 'object',
+            definitions: {
+              Child: {
+                type: 'object',
+                properties: { name: { type: 'string' } },
+              },
+            },
+            properties: { child: { $ref: '#/definitions/Child' } },
+          },
+        },
+        globals: { user: { $ref: 'catalog/user' } },
+      },
+    });
+    expect(objectDiagnostics).toHaveLength(0);
+
+    const allOfDiagnostics = lint('value.child.name', {
+      runtime: {
+        schemas: {
+          'catalog/first': {
+            type: 'object',
+            properties: { first: { type: 'string' } },
+          },
+          'catalog/second': {
+            type: 'object',
+            definitions: {
+              Child: {
+                type: 'object',
+                properties: { name: { type: 'string' } },
+              },
+            },
+            properties: { child: { $ref: '#/definitions/Child' } },
+          },
+        },
+        globals: {
+          value: {
+            allOf: [{ $ref: 'catalog/first' }, { $ref: 'catalog/second' }],
+          },
+        },
+      },
+    });
+    expect(allOfDiagnostics).toHaveLength(0);
   });
 
   it('reports invalid falsy and non-cloneable runtime roots', () => {

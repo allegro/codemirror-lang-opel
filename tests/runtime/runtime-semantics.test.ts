@@ -96,6 +96,25 @@ describe('runtime-aware semantics', () => {
     ).toBe(true);
   });
 
+  it('validates arguments in every part of an if expression', () => {
+    const diagnostics = lint(
+      "if(lookup('first') != null) lookup('second') else lookup('third')",
+      { runtime }
+    );
+
+    expect(
+      diagnostics.filter((diagnostic) =>
+        diagnostic.message.includes('argument')
+      )
+    ).toHaveLength(3);
+  });
+
+  it('accepts valid arguments in every part of an if expression', () => {
+    expect(
+      lint('if(lookup(1) != null) lookup(2) else lookup(3)', { runtime })
+    ).toHaveLength(0);
+  });
+
   it('preserves local schema reference roots through chained access', () => {
     const diagnostics = lint('user.child.name', {
       runtime: {

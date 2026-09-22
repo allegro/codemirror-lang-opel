@@ -1,5 +1,7 @@
+import { PRIMITIVE_METHOD_RECEIVERS } from './method-receivers';
 import type {
   OpelMethodReceiver,
+  OpelPrimitiveMethodReceiver,
   OpelRuntime,
   OpelRuntimeIssue,
   OpelSchema,
@@ -11,14 +13,6 @@ export interface RuntimeContext {
   readonly runtime: OpelRuntime;
 }
 
-const RECEIVERS: readonly OpelMethodReceiver[] = [
-  'string',
-  'number',
-  'integer',
-  'boolean',
-  'array',
-  'object',
-];
 const PRESENTATION_KEYS = new Set(['title', 'description']);
 const ISSUE_CODES = new Set([
   'invalid-runtime-entry',
@@ -451,15 +445,19 @@ export function createRuntimeContext(
     );
   }
   for (const receiver of Object.keys(methods)) {
-    if (!RECEIVERS.includes(receiver as OpelMethodReceiver)) {
+    if (
+      !PRIMITIVE_METHOD_RECEIVERS.includes(
+        receiver as OpelPrimitiveMethodReceiver
+      ) &&
+      !Object.prototype.hasOwnProperty.call(schemas, receiver)
+    ) {
       issues.push(
         issue(
-          'invalid-runtime-entry',
+          'unresolved-reference',
           `/methods/${pointerSegment(receiver)}`,
-          'unsupported method receiver'
+          `unresolved method receiver "${receiver}"`
         )
       );
-      continue;
     }
     if (!isRecord(methods[receiver])) {
       issues.push(
@@ -511,7 +509,7 @@ export function receiverForTypes(
   types: readonly string[]
 ): OpelMethodReceiver[] {
   return types.filter((type): type is OpelMethodReceiver =>
-    RECEIVERS.includes(type as OpelMethodReceiver)
+    PRIMITIVE_METHOD_RECEIVERS.includes(type as OpelPrimitiveMethodReceiver)
   );
 }
 

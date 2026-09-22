@@ -1,3 +1,6 @@
+import type { OpelPrimitiveMethodReceiver } from './method-receivers';
+export type { OpelPrimitiveMethodReceiver } from './method-receivers';
+
 export type OpelPrimitive =
   | 'string'
   | 'number'
@@ -49,13 +52,7 @@ export interface OpelCallable {
   readonly deprecated?: boolean | string;
 }
 
-export type OpelMethodReceiver =
-  | 'string'
-  | 'number'
-  | 'integer'
-  | 'boolean'
-  | 'array'
-  | 'object';
+export type OpelMethodReceiver = OpelPrimitiveMethodReceiver | (string & {});
 
 export interface OpelRuntime {
   readonly globals?: Readonly<Record<string, OpelSchema>>;

@@ -3,6 +3,7 @@ import type { SyntaxNode } from '@lezer/common';
 import type {
   OpelCallable,
   OpelMethodReceiver,
+  OpelPrimitiveMethodReceiver,
   OpelPrimitive,
   OpelParameter,
   OpelRuntime,
@@ -10,6 +11,7 @@ import type {
   OpelSignature,
 } from '../types';
 import type { RuntimeContext } from '../runtime';
+import { PRIMITIVE_METHOD_RECEIVERS } from '../method-receivers';
 import { OPEL_NODE_NAMES as NODE } from '../syntax/nodes';
 import { findSimilarTerms } from './similar-terms';
 
@@ -26,15 +28,6 @@ const EXPRESSION_NODES = new Set([
   NODE.Atom,
   NODE.PostfixExpression,
 ]);
-const RECEIVERS: readonly OpelMethodReceiver[] = [
-  'string',
-  'number',
-  'integer',
-  'boolean',
-  'array',
-  'object',
-];
-
 type Value = {
   schema: OpelSchema;
   root?: OpelSchema;
@@ -144,6 +137,7 @@ function analyzeExpression(
   if (node.name === NODE.IfExpression) {
     const branches = node.getChildren(NODE.Expression);
     if (branches.length >= 3) {
+      analyzeExpression(branches[0], env, ctx);
       return {
         schema: createUnionSchema([
           analyzeExpression(branches[1], env, ctx).schema,
@@ -399,6 +393,10 @@ function analyzeExpression(
     return atom ? analyzeExpression(atom, env, ctx) : { schema: true };
   }
   if (node.name === NODE.Atom) {
+    const conditional = node.getChild(NODE.IfExpression);
+    if (conditional) {
+      return analyzeExpression(conditional, env, ctx);
+    }
     const named = node.getChild(NODE.NamedValue);
     if (named) {
       const literal = readLiteralValue(named, ctx.source);
@@ -1378,6 +1376,14 @@ function valueDescription(value: Value, ctx: SemanticContext): string {
     }
     return type;
   }
+  const namedReceiver = namedMethodReceivers(
+    value.schema,
+    schemaRoot(value),
+    ctx.runtime
+  )[0];
+  if (namedReceiver) {
+    return namedReceiver;
+  }
   return schemaDescription(value.schema, schemaRoot(value), ctx.runtime);
 }
 
@@ -1408,19 +1414,10 @@ function availableProperties(
  */
 function availableMethods(receiver: Value, ctx: SemanticContext): string[] {
   const names = new Set<string>();
-  for (const type of getSchemaTypes(
-    receiver.schema,
-    schemaRoot(receiver),
-    ctx.runtime
-  )) {
-    const methods = ctx.runtime.methods?.[type as OpelMethodReceiver];
+  for (const type of methodReceivers(receiver, ctx.runtime)) {
+    const methods = ctx.runtime.methods?.[type];
     if (methods) {
       Object.keys(methods).forEach((name) => names.add(name));
-    }
-    if (type === 'integer' && ctx.runtime.methods?.number) {
-      Object.keys(ctx.runtime.methods.number).forEach((name) =>
-        names.add(name)
-      );
     }
   }
   return [...names].sort();
@@ -2327,30 +2324,74 @@ function resolveIdentifier(
   return { schema: true, error: true };
 }
 
+function namedMethodReceivers(
+  schema: OpelSchema,
+  root: OpelSchema,
+  runtime: OpelRuntime,
+  seen = new Set<OpelSchema>()
+): OpelMethodReceiver[] {
+  if (!isRecord(schema) || seen.has(schema)) {
+    return [];
+  }
+  seen.add(schema);
+  if (typeof schema.$ref === 'string') {
+    if (schema.$ref.startsWith('#/')) {
+      const resolved = resolveSchemaReference(schema, root, runtime);
+      return resolved.schema === schema
+        ? []
+        : namedMethodReceivers(resolved.schema, resolved.root, runtime, seen);
+    }
+    const target = runtime.schemas?.[schema.$ref];
+    if (
+      target === undefined ||
+      PRIMITIVE_METHOD_RECEIVERS.includes(
+        schema.$ref as OpelPrimitiveMethodReceiver
+      )
+    ) {
+      return [];
+    }
+    return [
+      schema.$ref,
+      ...namedMethodReceivers(target, target, runtime, seen),
+    ];
+  }
+  for (const key of ['oneOf', 'anyOf', 'allOf'] as const) {
+    if (Array.isArray(schema[key])) {
+      return schema[key].flatMap((child) =>
+        namedMethodReceivers(child, root, runtime, seen)
+      );
+    }
+  }
+  return [];
+}
+
+function methodReceivers(
+  receiver: Value,
+  runtime: OpelRuntime
+): OpelMethodReceiver[] {
+  const root = schemaRoot(receiver);
+  const ordered = namedMethodReceivers(receiver.schema, root, runtime);
+  for (const type of getSchemaTypes(receiver.schema, root, runtime)) {
+    if (type === 'integer') {
+      ordered.push('integer', 'number');
+    } else if (
+      PRIMITIVE_METHOD_RECEIVERS.includes(type as OpelPrimitiveMethodReceiver)
+    ) {
+      ordered.push(type);
+    }
+  }
+  return [...new Set(ordered)];
+}
+
 /**
- * Finds a method by the receiver's possible primitive types in receiver precedence order.
- * Integer receivers try integer methods first and then inherit number methods.
- * Why: The ordered lookup mirrors runtime dispatch, including the intentional integer-to-number method inheritance.
+ * Finds a method by named schema, inherited schema, and primitive receiver precedence.
  */
 function resolveMethod(
   receiver: Value,
   name: string,
   ctx: SemanticContext
 ): Callable | null {
-  const types = getSchemaTypes(
-    receiver.schema,
-    schemaRoot(receiver),
-    ctx.runtime
-  );
-  const ordered: OpelMethodReceiver[] = [];
-  for (const type of types) {
-    if (type === 'integer') {
-      ordered.push('integer', 'number');
-    } else if (RECEIVERS.includes(type as OpelMethodReceiver)) {
-      ordered.push(type as OpelMethodReceiver);
-    }
-  }
-  for (const type of ordered) {
+  for (const type of methodReceivers(receiver, ctx.runtime)) {
     const callable = ctx.runtime.methods?.[type]?.[name];
     if (callable) {
       return { ...callable, isLocal: false };

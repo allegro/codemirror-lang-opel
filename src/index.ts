@@ -6,6 +6,7 @@ export type {
   OpelParameter,
   OpelSignature,
   OpelCallable,
+  OpelPrimitiveMethodReceiver,
   OpelMethodReceiver,
   OpelRuntime,
   OpelRuntimeIssue,

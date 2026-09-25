@@ -96,32 +96,38 @@ describe('runtime-aware semantics', () => {
     ).toBe(true);
   });
 
-  it('lists all parameter values when no overload matches', () => {
+  it('lists and truncates parameter values when no overload matches', () => {
+    const names = [
+      'first',
+      'second',
+      'third',
+      'fourth',
+      'fifth',
+      'sixth',
+      'seventh',
+      'eighth',
+      'ninth',
+      'tenth',
+      'eleventh',
+      'twelfth',
+    ];
     const diagnostics = lint("lookup('unknown')", {
       runtime: {
         functions: {
           lookup: {
-            signatures: [
-              {
-                parameters: [{ name: 'name', schema: { const: 'first' } }],
-                returns: { type: 'string' },
-              },
-              {
-                parameters: [{ name: 'name', schema: { const: 'second' } }],
-                returns: { type: 'integer' },
-              },
-              {
-                parameters: [{ name: 'name', schema: { const: 'third' } }],
-                returns: { type: 'boolean' },
-              },
-            ],
+            signatures: names.map((name) => ({
+              parameters: [{ name: 'name', schema: { const: name } }],
+              returns: true,
+            })),
           },
         },
       },
     });
 
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0].message).toContain('"first" | "second" | "third"');
+    expect(diagnostics[0].message).toContain(
+      'any of the available values (12): "first", "second", "third" (+9 more)'
+    );
   });
 
   it('validates arguments in every part of an if expression', () => {
@@ -906,6 +912,37 @@ describe('runtime-aware semantics', () => {
     ).toBe(true);
   });
 
+  it.each([
+    ["'actual'", 'argument "actual"'],
+    ['1', 'argument 1'],
+    ['1.5', 'argument 1.5'],
+    ['true', 'argument true'],
+    ['null', 'argument null'],
+    ["{'key': 'value'}", "argument of type '{ key: string }'"],
+    ['[1]', "argument of type 'integer[]'"],
+  ])(
+    'describes the passed literal %s in mismatch diagnostics',
+    (literal, expected) => {
+      const diagnostics = lint(`accept(${literal})`, {
+        runtime: {
+          functions: {
+            accept: {
+              signatures: [
+                {
+                  parameters: [{ schema: { const: 'expected' } }],
+                  returns: true,
+                },
+              ],
+            },
+          },
+        },
+      });
+
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].message).toContain(expected);
+    }
+  );
+
   it('checks object members, deprecation, arguments, methods, and access ranges', () => {
     const deprecated = lint('user.name', { runtime });
     const unknownProperty = lint('user.missing', { runtime });
@@ -918,7 +955,7 @@ describe('runtime-aware semantics', () => {
       unknownProperty.some((d) => d.message.includes('Unknown property'))
     ).toBe(true);
     expect(mismatch.some((d) => d.message.includes('argument'))).toBe(true);
-    expect(mismatch[0].message).toContain("'string'");
+    expect(mismatch[0].message).toContain('argument "x"');
     expect(mismatch[0].message).toContain("'integer'");
     expect(method.some((d) => d.message.includes('Invalid method'))).toBe(
       false

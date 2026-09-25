@@ -1365,9 +1365,59 @@ function schemaDescription(
 }
 
 /**
+ * Formats literal unions as bounded value lists for argument diagnostics.
+ */
+function expectedParameterDescription(
+  schema: OpelSchema,
+  root: OpelSchema,
+  runtime: OpelRuntime
+): string {
+  const values: unknown[] = [];
+  for (const branch of resolveSchemaVariants(schema, root, runtime)) {
+    const object = schemaObject(branch.schema);
+    if (!object) {
+      return `parameter of type '${schemaDescription(schema, root, runtime)}'`;
+    }
+    if (object.const !== undefined) {
+      values.push(object.const);
+    } else if (Array.isArray(object.enum)) {
+      values.push(...object.enum);
+    } else {
+      return `parameter of type '${schemaDescription(schema, root, runtime)}'`;
+    }
+  }
+  const uniqueValues = values.filter(
+    (value, index) =>
+      values.findIndex((candidate) => literalEqual(candidate, value)) === index
+  );
+  if (uniqueValues.length < 2) {
+    return `parameter of type '${schemaDescription(schema, root, runtime)}'`;
+  }
+  const shownValues = uniqueValues.slice(0, 3).map(quoted).join(', ');
+  const remaining = uniqueValues.length - 3;
+  return `any of the available values (${uniqueValues.length}): ${shownValues}${remaining > 0 ? ` (+${remaining} more)` : ''}`;
+}
+
+/**
  * Describes an inferred value using its literal type when available, otherwise its schema description.
  * Objects and arrays use their schema so their structure is not lost in diagnostics.
  */
+function argumentDescription(
+  value: Value | undefined,
+  ctx: SemanticContext
+): string {
+  if (!value) {
+    return "argument of type 'unknown'";
+  }
+  if (value.literal !== undefined) {
+    const type = valueType(value.literal);
+    if (type !== 'object' && type !== 'array') {
+      return `argument ${quoted(value.literal)}`;
+    }
+  }
+  return `argument of type '${valueDescription(value, ctx)}'`;
+}
+
 function valueDescription(value: Value, ctx: SemanticContext): string {
   if (value.literal !== undefined) {
     const type = valueType(value.literal);
@@ -2238,8 +2288,12 @@ function analyzeCall(
           mismatchValue && mismatchSchema
             ? objectConstraintMessage(mismatchValue, mismatchSchema, ctx)
             : null;
-        const expectedType = mismatchSchema
-          ? schemaDescription(mismatchSchema, mismatchSchema, ctx.runtime)
+        const expectedParameter = mismatchSchema
+          ? expectedParameterDescription(
+              mismatchSchema,
+              mismatchSchema,
+              ctx.runtime
+            )
           : arityCompatible
               .map(
                 (signature) =>
@@ -2261,8 +2315,8 @@ function analyzeCall(
           'error',
           constraint ??
             (mismatchSchema
-              ? `Type mismatch: argument of type '${mismatchValue ? valueDescription(mismatchValue, ctx) : 'unknown'}' is not assignable to parameter of type '${expectedType}'.`
-              : `Type mismatch: argument of type '${mismatchValue ? valueDescription(mismatchValue, ctx) : 'unknown'}' does not match any call signature. Expected one of ${expectedType}.`),
+              ? `Type mismatch: ${argumentDescription(mismatchValue, ctx)} is not assignable to ${expectedParameter}.`
+              : `Type mismatch: ${argumentDescription(mismatchValue, ctx)} does not match any call signature. Expected one of ${expectedParameter}.`),
           ctx.diagnostics
         );
       }

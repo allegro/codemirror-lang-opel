@@ -2448,6 +2448,13 @@ function resolvePropertyAccess(
     if (variant === true) {
       continue;
     }
+    const types = getSchemaTypes(variant, resolution.root, ctx.runtime);
+    if (types.some((type) => type !== 'object' && type !== 'never')) {
+      unsupported++;
+    }
+    if (types.length > 0 && !types.includes('object')) {
+      continue;
+    }
     const object = schemaObject(variant);
     if (!object) {
       unsupported++;

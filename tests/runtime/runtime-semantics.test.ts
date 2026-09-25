@@ -821,6 +821,91 @@ describe('runtime-aware semantics', () => {
     expect(lint('acceptConst(constValue)', options)).toHaveLength(1);
   });
 
+  const primitiveTypes = [
+    'string',
+    'number',
+    'integer',
+    'boolean',
+    'array',
+    'null',
+  ] as const;
+
+  it.each(primitiveTypes)(
+    'rejects property access on a function returning %s',
+    (type) => {
+      const diagnostics = lint("lookup('name').arbitrary", {
+        runtime: {
+          functions: {
+            lookup: {
+              signatures: [
+                {
+                  parameters: [{ name: 'name', schema: { type: 'string' } }],
+                  returns: { type },
+                },
+              ],
+            },
+          },
+        },
+      });
+
+      expect(
+        diagnostics.some((diagnostic) =>
+          diagnostic.message.includes('Unknown property "arbitrary"')
+        )
+      ).toBe(true);
+    }
+  );
+
+  it.each(primitiveTypes)(
+    'rejects property access on a global of type %s',
+    (type) => {
+      const diagnostics = lint('value.arbitrary', {
+        runtime: { globals: { value: { type } } },
+      });
+
+      expect(
+        diagnostics.some((diagnostic) =>
+          diagnostic.message.includes('Unknown property "arbitrary"')
+        )
+      ).toBe(true);
+    }
+  );
+
+  it('rejects property access on a function returning multiple types when none of them is an object', () => {
+    const diagnostics = lint("lookup('name').arbitrary", {
+      runtime: {
+        functions: {
+          lookup: {
+            signatures: [
+              {
+                parameters: [{ name: 'name', schema: { type: 'string' } }],
+                returns: { type: ['integer', 'null'] },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(
+      diagnostics.some((diagnostic) =>
+        diagnostic.message.includes('Unknown property "arbitrary"')
+      )
+    ).toBe(true);
+  });
+
+  it('rejects property access on a global with multiple types when none of them is an object', () => {
+    const diagnostics = lint('value.arbitrary', {
+      runtime: { globals: { value: { type: ['integer', 'null'] } } },
+    });
+
+    expect(
+      diagnostics.some((diagnostic) =>
+        diagnostic.message.includes('Unknown property "arbitrary"')
+      )
+    ).toBe(true);
+  });
+
   it('checks object members, deprecation, arguments, methods, and access ranges', () => {
     const deprecated = lint('user.name', { runtime });
     const unknownProperty = lint('user.missing', { runtime });

@@ -36,7 +36,7 @@ const runtime = {
       },
     },
   },
-};
+} as const;
 
 describe('runtime-aware semantics', () => {
   it('reports unknown symbols and functions with or without runtime metadata', () => {
@@ -94,6 +94,34 @@ describe('runtime-aware semantics', () => {
     expect(
       diagnostics.some((diagnostic) => diagnostic.message.includes('argument'))
     ).toBe(true);
+  });
+
+  it('lists all parameter values when no overload matches', () => {
+    const diagnostics = lint("lookup('unknown')", {
+      runtime: {
+        functions: {
+          lookup: {
+            signatures: [
+              {
+                parameters: [{ name: 'name', schema: { const: 'first' } }],
+                returns: { type: 'string' },
+              },
+              {
+                parameters: [{ name: 'name', schema: { const: 'second' } }],
+                returns: { type: 'integer' },
+              },
+              {
+                parameters: [{ name: 'name', schema: { const: 'third' } }],
+                returns: { type: 'boolean' },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0].message).toContain('"first" | "second" | "third"');
   });
 
   it('validates arguments in every part of an if expression', () => {
@@ -244,7 +272,7 @@ describe('runtime-aware semantics', () => {
           },
         },
       },
-    };
+    } as const;
     for (const expression of [
       'acceptConst(constValue)',
       'acceptEnum(enumValue)',
@@ -281,7 +309,7 @@ describe('runtime-aware semantics', () => {
           },
         },
       },
-    };
+    } as const;
     const commonDiagnostics = lint('value.common', options);
     const nameDiagnostics = lint('value.name', options);
     const idDiagnostics = lint('value.id', options);
@@ -353,7 +381,7 @@ describe('runtime-aware semantics', () => {
           },
         },
       },
-    };
+    } as const;
 
     expect(lint('acceptInteger({id: text})', options)).toHaveLength(1);
     expect(lint('acceptRequired({id: text})', options)).toHaveLength(0);
@@ -376,7 +404,7 @@ describe('runtime-aware semantics', () => {
           },
         },
       },
-    };
+    } as const;
 
     expect(lint('acceptConst(text)', options)).toHaveLength(1);
     expect(lint('acceptEnum(text)', options)).toHaveLength(1);
@@ -420,7 +448,7 @@ describe('runtime-aware semantics', () => {
           },
         },
       },
-    };
+    } as const;
 
     expect(lint("acceptPattern({'x-id': text})", options)).toHaveLength(0);
     expect(lint("acceptTyped({'count': 'x'})", options)).toHaveLength(1);
@@ -786,7 +814,7 @@ describe('runtime-aware semantics', () => {
           },
         },
       },
-    };
+    } as const;
 
     expect(lint('acceptRequired(requiredValue)', options)).toHaveLength(0);
     expect(lint('acceptItems(itemsValue)', options)).toHaveLength(1);

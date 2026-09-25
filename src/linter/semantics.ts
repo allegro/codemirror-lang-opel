@@ -2208,39 +2208,61 @@ function analyzeCall(
           ctx.diagnostics
         );
       } else {
-        const mismatch = argNodes.find(
-          (arg, index) =>
-            !isValueCompatibleWithSchema(
-              args[index],
-              arityCompatible[0].parameters[index].schema,
-              arityCompatible[0].parameters[index].schema,
-              ctx.runtime
-            )
-        );
-        const mismatchIndex = argNodes.findIndex(
-          (arg, index) =>
-            !isValueCompatibleWithSchema(
-              args[index],
-              arityCompatible[0].parameters[index].schema,
-              arityCompatible[0].parameters[index].schema,
-              ctx.runtime
-            )
-        );
+        const mismatchDetails = arityCompatible.map((signature) => {
+          const mismatchIndex = argNodes.findIndex(
+            (arg, index) =>
+              !isValueCompatibleWithSchema(
+                args[index],
+                signature.parameters[index].schema,
+                signature.parameters[index].schema,
+                ctx.runtime
+              )
+          );
+          return { signature, mismatchIndex };
+        });
+        const mismatchIndex = mismatchDetails[0]?.mismatchIndex ?? -1;
         const mismatchValue =
           mismatchIndex >= 0 ? args[mismatchIndex] : undefined;
         const mismatchSchema =
-          mismatchIndex >= 0
-            ? arityCompatible[0].parameters[mismatchIndex].schema
+          mismatchIndex >= 0 &&
+          mismatchDetails.every(
+            (details) => details.mismatchIndex === mismatchIndex
+          )
+            ? createUnionSchema(
+                mismatchDetails.map(
+                  ({ signature }) => signature.parameters[mismatchIndex].schema
+                )
+              )
             : undefined;
         const constraint =
           mismatchValue && mismatchSchema
             ? objectConstraintMessage(mismatchValue, mismatchSchema, ctx)
             : null;
+        const expectedType = mismatchSchema
+          ? schemaDescription(mismatchSchema, mismatchSchema, ctx.runtime)
+          : arityCompatible
+              .map(
+                (signature) =>
+                  `(${signature.parameters
+                    .map((parameter) =>
+                      schemaDescription(
+                        parameter.schema,
+                        parameter.schema,
+                        ctx.runtime
+                      )
+                    )
+                    .join(', ')})`
+              )
+              .join(' or ');
+        const mismatchNode =
+          mismatchIndex >= 0 ? argNodes[mismatchIndex] : undefined;
         addDiagnostic(
-          constraint ? argNodes[mismatchIndex] : (mismatch ?? node),
+          mismatchNode ?? node,
           'error',
           constraint ??
-            `Type mismatch: argument of type '${mismatchValue ? valueDescription(mismatchValue, ctx) : 'unknown'}' is not assignable to parameter of type '${mismatchSchema ? schemaDescription(mismatchSchema, mismatchSchema, ctx.runtime) : 'unknown'}'.`,
+            (mismatchSchema
+              ? `Type mismatch: argument of type '${mismatchValue ? valueDescription(mismatchValue, ctx) : 'unknown'}' is not assignable to parameter of type '${expectedType}'.`
+              : `Type mismatch: argument of type '${mismatchValue ? valueDescription(mismatchValue, ctx) : 'unknown'}' does not match any call signature. Expected one of ${expectedType}.`),
           ctx.diagnostics
         );
       }

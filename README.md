@@ -52,6 +52,77 @@ Available options:
 
 `runtimeGlobals` was removed. Migrate each name to `runtime.globals`, for example `{ runtime: { globals: { ctx: true } } }`.
 
+### Runtime metadata
+
+Runtime functions and methods are declared with callable signatures. Use `schema: true` for an unconstrained value and `optional: true` for an optional trailing parameter:
+
+```ts
+import { opelExtensions } from '@allegro/codemirror-lang-opel';
+import type { OpelRuntime } from '@allegro/codemirror-lang-opel';
+
+const runtime = {
+  functions: {
+    readSetting: {
+      signatures: [
+        {
+          parameters: [
+            { name: 'name', schema: { type: 'string' } },
+            { name: 'fallback', schema: true, optional: true },
+          ],
+          returns: { type: 'string' },
+        },
+      ],
+    },
+    now: {
+      signatures: [{ parameters: [], returns: { $ref: 'CalendarInstant' } }],
+    },
+  },
+  schemas: {
+    CalendarInstant: {},
+  },
+  methods: {
+    string: {
+      length: {
+        signatures: [{ parameters: [], returns: { type: 'integer' } }],
+      },
+    },
+    CalendarInstant: {
+      plusDays: {
+        signatures: [
+          {
+            parameters: [{ name: 'days', schema: { type: 'integer' } }],
+            returns: { $ref: 'CalendarInstant' },
+          },
+        ],
+      },
+      formatIso: {
+        signatures: [
+          {
+            parameters: [{ name: 'pattern', schema: { type: 'string' } }],
+            returns: { type: 'string' },
+          },
+        ],
+      },
+    },
+  },
+} satisfies OpelRuntime;
+
+const extensions = opelExtensions({
+  runtime,
+  onRuntimeIssues: (issues) => console.error(issues),
+});
+```
+
+The named receiver above makes these expressions type-check:
+
+```text
+now().plusDays(1).formatIso('yyyy-MM-dd')
+'hello'.length()
+readSetting('theme', 'dark')
+```
+
+A method receiver can be a primitive type such as `string` or `integer`, or the exact name of a schema in `runtime.schemas`. Returning the same `$ref` preserves the named type for chained calls.
+
 ## Development
 
 ### Prerequisites

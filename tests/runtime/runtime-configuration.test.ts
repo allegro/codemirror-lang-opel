@@ -38,14 +38,19 @@ describe('runtime configuration', () => {
       path: string;
     }[] = [];
     const runtime = {
-      globals: { user: { type: 'string', title: 42 as unknown as string } },
+      globals: {
+        user: { type: 'string' as const, title: 42 as unknown as string },
+      },
     };
 
     lint('user', {
       runtime,
       onRuntimeIssues: (next) => issues.push(...next),
     });
-    runtime.globals.user = { type: 'integer' };
+
+    expect(runtime.globals.user.title as unknown).toBe(42);
+    runtime.globals.user.title = 'updated';
+    expect(runtime.globals.user.title).toBe('updated');
 
     expect(issues).toHaveLength(1);
     expect(issues[0].code).toBe('invalid-metadata');

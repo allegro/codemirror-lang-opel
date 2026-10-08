@@ -21,11 +21,11 @@ export const UndeclaredVariable: StoryObj = {
   }),
 };
 
-export const RuntimeGlobals: StoryObj = {
+export const RuntimeMetadata: StoryObj = {
   name: 'Runtime Globals',
   ...createEditorStory({
     doc: `ctx + env`,
-    runtimeGlobals: ['ctx', 'env'],
+    runtime: { globals: { ctx: true, env: true } },
   }),
 };
 
@@ -55,6 +55,27 @@ empty`,
   }),
 };
 
+export const InvalidArithmeticOperands: StoryObj = {
+  name: 'Arithmetic Type Errors and Valid Expressions',
+  ...createEditorStory({
+    doc: `[
+  true + false,
+  true + 1,
+  1 + false,
+  true - 1,
+  1 - false,
+  1 + 2,
+  'hello' + ' world',
+  3 - 1,
+  true * 2,
+  2 / false,
+  2 * 3,
+  8 / 2
+]`,
+    runtime: {},
+  }),
+};
+
 export const ValidCode: StoryObj = {
   name: 'Valid — No Diagnostics',
   ...createEditorStory({
@@ -68,6 +89,15 @@ export const MethodCallOnValue: StoryObj = {
   name: 'Method Call on Value',
   ...createEditorStory({
     doc: `['a', 2, 'c'].size()`,
+    runtime: {
+      methods: {
+        array: {
+          size: {
+            signatures: [{ parameters: [], returns: { type: 'integer' } }],
+          },
+        },
+      },
+    },
   }),
 };
 

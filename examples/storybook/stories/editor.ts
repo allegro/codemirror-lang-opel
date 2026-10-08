@@ -12,14 +12,15 @@ import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { tooltips } from '@codemirror/view';
 import { vscodeDark } from '@uiw/codemirror-theme-vscode';
 import { opel, opelExtensions } from '../../../src';
+import type { OpelRuntime } from '../../../src';
 
 export interface EditorConfig {
   /** Initial document content shown in the editor. */
   doc: string;
   /** Whether to enable the OPEL linter (default: true). */
   enableLinter?: boolean;
-  /** Runtime globals to whitelist in the linter. */
-  runtimeGlobals?: readonly string[];
+  /** Runtime metadata consumed by the linter. */
+  runtime?: OpelRuntime;
   /** Extra CodeMirror extensions to layer on top. */
   extraExtensions?: Extension[];
 }
@@ -34,26 +35,24 @@ function toTemplateLiteral(value: string): string {
 function createStorySource({
   doc,
   enableLinter = true,
-  runtimeGlobals = [],
+  runtime,
 }: EditorConfig): string {
-  if (enableLinter) {
-    return `const opelCode = ${toTemplateLiteral(doc)};
+  const runtimeDeclaration = runtime
+    ? `const runtime = ${JSON.stringify(runtime, null, 2)};\n\n`
+    : '';
 
-const extensions = opelExtensions(${runtimeGlobals.length > 0 ? `{ runtimeGlobals: ${JSON.stringify(runtimeGlobals)} }` : ''});`;
+  if (enableLinter) {
+    return `const opelCode = ${toTemplateLiteral(doc)};\n\n${runtimeDeclaration}const extensions = opelExtensions(${runtime ? '{ runtime }' : ''});`;
   }
 
-  return `const opelCode = ${toTemplateLiteral(doc)};
-
-const extensions = [
-  opel(),
-];`;
+  return `const opelCode = ${toTemplateLiteral(doc)};\n\n${runtimeDeclaration}const extensions = [\n  opel(${runtime ? '{ runtime }' : ''}),\n];`;
 }
 
 /** Creates a self-contained CodeMirror editor element for use in stories. */
 export function createEditor({
   doc,
   enableLinter = true,
-  runtimeGlobals = [],
+  runtime,
   extraExtensions = [],
 }: EditorConfig): HTMLElement {
   const container = document.createElement('div');
@@ -74,7 +73,7 @@ export function createEditor({
     keymap.of([...defaultKeymap, ...historyKeymap]),
     tooltips({ parent: document.body }),
     ...(enableLinter
-      ? opelExtensions({ enableLinter, includeLintGutter: true, runtimeGlobals })
+      ? opelExtensions({ enableLinter, includeLintGutter: true, runtime })
       : [opel()]),
     ...extraExtensions,
   ];

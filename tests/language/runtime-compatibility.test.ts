@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hasParseError, lint } from '../support/test-utils';
+import { hasParseError } from '../support/test-utils';
 
 describe('runtime parser compatibility', () => {
   it('parses runtime-supported call chaining forms', () => {

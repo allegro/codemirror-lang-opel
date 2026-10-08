@@ -12,6 +12,7 @@ import { autocompletion } from '@codemirror/autocomplete';
 import { opelCompletions } from '../autocomplete';
 import type { OpelOptions } from '../types';
 import { OPEL_KEYWORDS } from '../syntax/constants';
+import { OPEL_NODE_NAMES as NODE } from '../syntax/nodes';
 
 /// A language provider based on the OPEL
 /// parser, extended with highlighting and indentation information.
@@ -22,27 +23,27 @@ export const opelLanguage = LRLanguage.define({
     props: [
       indentNodeProp.add({
         // OPEL-specific indentation rules
-        IfExpression: continuedIndent({ except: /^\s*(else\b)/ }),
-        FunctionInstantiation: continuedIndent(),
-        BlockExpression: delimitedIndent({ closing: '}' }),
-        MapInstantiation: delimitedIndent({ closing: '}' }),
-        ListInstantiation: delimitedIndent({ closing: ']' }),
-        FunctionCall: continuedIndent(),
-        MethodCall: continuedIndent(),
-        Declaration: continuedIndent({ except: /^\s*(val\b)/ }),
-        Train: continuedIndent(),
+        [NODE.IfExpression]: continuedIndent({ except: /^\s*(else\b)/ }),
+        [NODE.FunctionInstantiation]: continuedIndent(),
+        [NODE.BlockExpression]: delimitedIndent({ closing: '}' }),
+        [NODE.MapInstantiation]: delimitedIndent({ closing: '}' }),
+        [NODE.ListInstantiation]: delimitedIndent({ closing: ']' }),
+        [NODE.FunctionCall]: continuedIndent(),
+        [NODE.MethodCall]: continuedIndent(),
+        [NODE.Declaration]: continuedIndent({ except: /^\s*(val\b)/ }),
+        [NODE.PostfixExpression]: continuedIndent(),
         // Add indentation for complex expressions
-        OrExpression: continuedIndent(),
-        AndExpression: continuedIndent(),
-        AdditiveExpression: continuedIndent(),
-        MultiplyExpression: continuedIndent(),
+        [NODE.OrExpression]: continuedIndent(),
+        [NODE.AndExpression]: continuedIndent(),
+        [NODE.AdditiveExpression]: continuedIndent(),
+        [NODE.MultiplyExpression]: continuedIndent(),
       }),
       foldNodeProp.add({
         // OPEL structures that can be folded
-        ['BlockExpression MapInstantiation ListInstantiation FunctionInstantiation']:
+        [`${NODE.BlockExpression} ${NODE.MapInstantiation} ${NODE.ListInstantiation} ${NODE.FunctionInstantiation}`]:
           foldInside,
         // Allow folding of complex if expressions
-        IfExpression: foldInside,
+        [NODE.IfExpression]: foldInside,
       }),
     ],
   }),
@@ -66,7 +67,7 @@ export const opelLanguage = LRLanguage.define({
 });
 
 /// OPEL language support with optional configuration.
-export function opel(options: OpelOptions = {}) {
+export function opel(_options: OpelOptions = {}) {
   return new LanguageSupport(opelLanguage, [
     autocompletion({
       override: [opelCompletions()],

@@ -4,6 +4,7 @@ import type {
   CompletionResult,
 } from '@codemirror/autocomplete';
 import { OPEL_KEYWORD_COMPLETIONS } from '../syntax/constants';
+import { OPEL_NODE_NAMES as NODE } from '../syntax/nodes';
 
 /**
  * Creates an autocomplete extension for OPEL
@@ -21,7 +22,7 @@ export function opelCompletions() {
     // Get all declared variables from declarations in the document.
     const declaredVariables: string[] = [];
     tree.cursor().iterate((node) => {
-      if (node.name === 'VariableName') {
+      if (node.name === NODE.VariableName) {
         const varName = context.state.doc.sliceString(node.from, node.to);
         if (!declaredVariables.includes(varName)) {
           declaredVariables.push(varName);
@@ -47,10 +48,10 @@ export function opelCompletions() {
     }
     const isAfterDot =
       charBeforeWord === '.' ||
-      nodeBefore.name === 'Dot' ||
-      parent?.name === 'Train' ||
-      parent?.name === 'FieldAccess' ||
-      parent?.name === 'MethodCall';
+      nodeBefore.name === NODE.Dot ||
+      parent?.name === NODE.PostfixExpression ||
+      parent?.name === NODE.FieldAccess ||
+      parent?.name === NODE.MethodCall;
 
     if (isAfterDot) {
       // After a dot, suggest methods

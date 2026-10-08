@@ -92,7 +92,9 @@ describe('runtime-aware semantics', () => {
     });
 
     expect(
-      diagnostics.some((diagnostic) => diagnostic.message.includes('argument'))
+      diagnostics.some((diagnostic) =>
+        diagnostic.message.includes('Type mismatch: argument')
+      )
     ).toBe(true);
   });
 
@@ -138,7 +140,7 @@ describe('runtime-aware semantics', () => {
 
     expect(
       diagnostics.filter((diagnostic) =>
-        diagnostic.message.includes('argument')
+        diagnostic.message.includes('Type mismatch: argument')
       )
     ).toHaveLength(3);
   });
@@ -150,7 +152,7 @@ describe('runtime-aware semantics', () => {
   });
 
   it('preserves local schema reference roots through chained access', () => {
-    const diagnostics = lint('user.child.name', {
+    const diagnostics = lint('acceptInteger(user.child.name)', {
       runtime: {
         globals: {
           user: {
@@ -164,10 +166,21 @@ describe('runtime-aware semantics', () => {
             properties: { child: { $ref: '#/definitions/Child' } },
           },
         },
+        functions: {
+          acceptInteger: {
+            signatures: [
+              { parameters: [{ schema: { type: 'integer' } }], returns: true },
+            ],
+          },
+        },
       },
     });
 
-    expect(diagnostics).toHaveLength(0);
+    expect(
+      diagnostics.some((diagnostic) =>
+        diagnostic.message.includes('Type mismatch: argument')
+      )
+    ).toBe(true);
   });
 
   it('rejects contradictory allOf schemas during compatibility checks', () => {
@@ -190,12 +203,14 @@ describe('runtime-aware semantics', () => {
     });
 
     expect(
-      diagnostics.some((diagnostic) => diagnostic.message.includes('argument'))
+      diagnostics.some((diagnostic) =>
+        diagnostic.message.includes('Type mismatch: argument')
+      )
     ).toBe(true);
   });
 
   it('resolves parameter-local references against each parameter schema', () => {
-    const diagnostics = lint('accept(text)', {
+    const diagnostics = lint('accept(text, text)', {
       runtime: {
         globals: { text: { type: 'string' } },
         functions: {
@@ -209,6 +224,12 @@ describe('runtime-aware semantics', () => {
                       definitions: { Text: { type: 'string' } },
                     },
                   },
+                  {
+                    schema: {
+                      $ref: '#/definitions/Count',
+                      definitions: { Count: { type: 'integer' } },
+                    },
+                  },
                 ],
                 returns: true,
               },
@@ -218,7 +239,11 @@ describe('runtime-aware semantics', () => {
       },
     });
 
-    expect(diagnostics).toHaveLength(0);
+    expect(
+      diagnostics.filter((diagnostic) =>
+        diagnostic.message.includes('Type mismatch: argument')
+      )
+    ).toHaveLength(1);
   });
 
   it('checks non-literal const, enum, object, required, and item constraints', () => {
@@ -229,7 +254,7 @@ describe('runtime-aware semantics', () => {
           enumValue: { enum: ['actual'] },
           objectValue: {
             type: 'object',
-            properties: { id: { type: 'integer' } },
+            properties: { id: { type: 'string' } },
           },
           itemsValue: { type: 'array', items: { type: 'string' } },
         },
@@ -287,7 +312,7 @@ describe('runtime-aware semantics', () => {
     ]) {
       expect(
         lint(expression, options).filter((diagnostic) =>
-          diagnostic.message.includes('argument')
+          diagnostic.message.includes('Type mismatch: argument')
         ),
         expression
       ).toHaveLength(1);
@@ -391,6 +416,7 @@ describe('runtime-aware semantics', () => {
 
     expect(lint('acceptInteger({id: text})', options)).toHaveLength(1);
     expect(lint('acceptRequired({id: text})', options)).toHaveLength(0);
+    expect(lint('acceptRequired({})', options)).toHaveLength(1);
   });
 
   it('rejects broad schemas for const and enum parameters', () => {
@@ -483,7 +509,9 @@ describe('runtime-aware semantics', () => {
     });
 
     expect(
-      diagnostics.some((diagnostic) => diagnostic.message.includes('argument'))
+      diagnostics.some((diagnostic) =>
+        diagnostic.message.includes('Type mismatch: argument')
+      )
     ).toBe(true);
   });
 
@@ -508,7 +536,9 @@ describe('runtime-aware semantics', () => {
     });
 
     expect(
-      diagnostics.some((diagnostic) => diagnostic.message.includes('argument'))
+      diagnostics.some((diagnostic) =>
+        diagnostic.message.includes('Type mismatch: argument')
+      )
     ).toBe(true);
   });
 
@@ -534,7 +564,7 @@ describe('runtime-aware semantics', () => {
     });
     expect(
       closedDiagnostics.filter((diagnostic) =>
-        diagnostic.message.includes('argument')
+        diagnostic.message.includes('Type mismatch: argument')
       )
     ).toHaveLength(1);
 
@@ -564,7 +594,7 @@ describe('runtime-aware semantics', () => {
     });
     expect(
       typedDiagnostics.filter((diagnostic) =>
-        diagnostic.message.includes('argument')
+        diagnostic.message.includes('Type mismatch: argument')
       )
     ).toHaveLength(1);
   });
@@ -599,7 +629,7 @@ describe('runtime-aware semantics', () => {
     });
     expect(
       patternPropertyDiagnostics.filter((diagnostic) =>
-        diagnostic.message.includes('argument')
+        diagnostic.message.includes('Type mismatch: argument')
       )
     ).toHaveLength(1);
 
@@ -632,7 +662,7 @@ describe('runtime-aware semantics', () => {
     });
     expect(
       extraDiagnostics.filter((diagnostic) =>
-        diagnostic.message.includes('argument')
+        diagnostic.message.includes('Type mismatch: argument')
       )
     ).toHaveLength(1);
 
@@ -684,7 +714,7 @@ describe('runtime-aware semantics', () => {
     });
     expect(
       typedDiagnostics.filter((diagnostic) =>
-        diagnostic.message.includes('argument')
+        diagnostic.message.includes('Type mismatch: argument')
       )
     ).toHaveLength(1);
   });
@@ -719,7 +749,9 @@ describe('runtime-aware semantics', () => {
     });
 
     expect(
-      diagnostics.some((diagnostic) => diagnostic.message.includes('argument'))
+      diagnostics.some((diagnostic) =>
+        diagnostic.message.includes('Type mismatch: argument')
+      )
     ).toBe(true);
   });
 
@@ -952,11 +984,12 @@ describe('runtime-aware semantics', () => {
       true
     );
     expect(
-      unknownProperty.some((d) => d.message.includes('Unknown property'))
-    ).toBe(true);
-    expect(mismatch.some((d) => d.message.includes('argument'))).toBe(true);
-    expect(mismatch[0].message).toContain('argument "x"');
-    expect(mismatch[0].message).toContain("'integer'");
+      unknownProperty.find((d) => d.message.includes('Unknown property'))
+    ).toMatchObject({ from: 4, to: 12 });
+    expect(mismatch).toHaveLength(1);
+    expect(mismatch[0].message).toContain(
+      'Type mismatch: argument "x" is not assignable to parameter of type \'integer\''
+    );
     expect(method.some((d) => d.message.includes('Invalid method'))).toBe(
       false
     );
@@ -985,40 +1018,52 @@ describe('runtime-aware semantics', () => {
       ).toBe(true);
     }
 
-    for (const expression of [
-      'true - 1',
-      '1 - false',
-      'true * 2',
-      '2 * false',
-      'true / 2',
-      '2 / false',
-    ]) {
+    for (const [expression, operator] of [
+      ['true - 1', '-'],
+      ['1 - false', '-'],
+      ['true * 2', '*'],
+      ['2 * false', '*'],
+      ['true / 2', '/'],
+      ['2 / false', '/'],
+    ] as const) {
       const diagnostics = lint(expression, { runtime });
       expect(
-        diagnostics.some(
-          (diagnostic) =>
-            diagnostic.message.includes('Operator') &&
-            (diagnostic.message.includes("Operator '-' cannot be applied") ||
-              diagnostic.message.includes("Operator '*' cannot be applied") ||
-              diagnostic.message.includes("Operator '/' cannot be applied"))
+        diagnostics.some((diagnostic) =>
+          diagnostic.message.includes(
+            `Operator '${operator}' cannot be applied`
+          )
         )
       ).toBe(true);
     }
   });
 
   it('enforces required properties and strict local lambda arity', () => {
-    const diagnostics = lint('val f = x -> x; f(1, 2)', {
+    const diagnostics = lint('val f = x -> x; f(1, 2)');
+    expect(diagnostics.some((d) => d.message.includes('arity'))).toBe(true);
+
+    const userSchema = {
+      type: 'object',
+      properties: {
+        id: { type: 'integer' },
+        name: { type: 'string' },
+      },
+      required: ['id', 'name'],
+    } as const;
+    const missingRequiredProperty = lint("acceptUser({'id': 1})", {
       runtime: {
-        globals: {
-          value: {
-            type: 'object',
-            properties: { id: { type: 'integer' }, name: { type: 'string' } },
-            required: ['id', 'name'],
-            additionalProperties: false,
+        functions: {
+          acceptUser: {
+            signatures: [
+              { parameters: [{ schema: userSchema }], returns: true },
+            ],
           },
         },
       },
     });
-    expect(diagnostics.some((d) => d.message.includes('arity'))).toBe(true);
+    expect(
+      missingRequiredProperty.some((d) =>
+        d.message.includes('Property "name" is missing from type')
+      )
+    ).toBe(true);
   });
 });

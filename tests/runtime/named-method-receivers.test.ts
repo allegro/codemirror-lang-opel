@@ -88,7 +88,7 @@ describe('named schema method receivers', () => {
     expect(lint('clockNow().moveByDays(1)', { runtime })).toHaveLength(0);
     expect(
       lint("clockNow().moveByDays('one')", { runtime }).some((diagnostic) =>
-        diagnostic.message.includes('argument')
+        diagnostic.message.includes('Type mismatch: argument')
       )
     ).toBe(true);
   });
@@ -123,7 +123,7 @@ describe('named schema method receivers', () => {
     expect(lint("clockNow().moveBy('tomorrow')", { runtime })).toHaveLength(0);
     expect(
       lint('clockNow().moveBy(true)', { runtime }).some((diagnostic) =>
-        diagnostic.message.includes('argument')
+        diagnostic.message.includes('Type mismatch: argument')
       )
     ).toBe(true);
     expect(lint('clockNow().deprecatedMove()', { runtime })[0]?.message).toBe(

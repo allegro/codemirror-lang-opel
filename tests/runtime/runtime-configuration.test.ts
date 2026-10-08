@@ -2,11 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { lint } from '../support/test-utils';
 
 describe('runtime configuration', () => {
-  it('reports duplicate symbols and disables runtime semantics atomically', () => {
+  it('reports duplicate symbols and disables runtime semantics', () => {
     const issues: { code: string; path: string; severity: string }[] = [];
-    const diagnostics = lint('missing', {
+    const diagnostics = lint('available', {
       runtime: {
-        globals: { same: { type: 'string' } },
+        globals: {
+          same: { type: 'string' },
+          available: { type: 'string' },
+        },
         functions: {
           same: { signatures: [{ parameters: [], returns: true }] },
         },
@@ -19,8 +22,10 @@ describe('runtime configuration', () => {
     );
     expect(issues.every((issue) => issue.path.startsWith('/'))).toBe(true);
     expect(
-      diagnostics.some((diagnostic) =>
-        diagnostic.message.includes('Unknown symbol')
+      diagnostics.some(
+        (diagnostic) =>
+          diagnostic.message.includes('Unknown symbol') &&
+          diagnostic.message.includes('available')
       )
     ).toBe(true);
     expect(

@@ -23,26 +23,39 @@ describe('runtime semantic edge cases', () => {
           },
         },
       },
+      functions: {
+        acceptInteger: {
+          signatures: [
+            { parameters: [{ schema: { type: 'integer' } }], returns: true },
+          ],
+        },
+      },
     };
     const issues: { code: string }[] = [];
+    const localDiagnostics = lint('acceptInteger(user.name)', {
+      runtime,
+      onRuntimeIssues: (next) => issues.push(...next),
+    });
     expect(
-      lint('user.name', {
-        runtime,
-        onRuntimeIssues: (next) => issues.push(...next),
-      })
-    ).toHaveLength(0);
+      localDiagnostics.some((diagnostic) =>
+        diagnostic.message.includes('Type mismatch: argument')
+      )
+    ).toBe(true);
+    const recursiveDiagnostics = lint('acceptInteger(user.next.name)', {
+      runtime,
+      onRuntimeIssues: (next) => issues.push(...next),
+    });
     expect(
-      lint('user.next.name', {
-        runtime,
-        onRuntimeIssues: (next) => issues.push(...next),
-      })
-    ).toHaveLength(0);
+      recursiveDiagnostics.some((diagnostic) =>
+        diagnostic.message.includes('Type mismatch: argument')
+      )
+    ).toBe(true);
     expect(issues).toHaveLength(0);
   });
 
   it('resolves local references inside external schemas against the external root', () => {
     const issues: { code: string }[] = [];
-    lint('user.name', {
+    const diagnostics = lint('acceptInteger(user.name)', {
       runtime: {
         schemas: {
           'catalog/user/1.0': {
@@ -52,15 +65,27 @@ describe('runtime semantic edge cases', () => {
           },
         },
         globals: { user: { $ref: 'catalog/user/1.0' } },
+        functions: {
+          acceptInteger: {
+            signatures: [
+              { parameters: [{ schema: { type: 'integer' } }], returns: true },
+            ],
+          },
+        },
       },
       onRuntimeIssues: (next) => issues.push(...next),
     });
 
+    expect(
+      diagnostics.some((diagnostic) =>
+        diagnostic.message.includes('Type mismatch: argument')
+      )
+    ).toBe(true);
     expect(issues).toHaveLength(0);
   });
 
   it('preserves external schema roots through derived property access', () => {
-    const diagnostics = lint('user.child.name', {
+    const diagnostics = lint('acceptInteger(user.child.name)', {
       runtime: {
         schemas: {
           'catalog/user/1.0': {
@@ -75,24 +100,49 @@ describe('runtime semantic edge cases', () => {
           },
         },
         globals: { user: { $ref: 'catalog/user/1.0' } },
+        functions: {
+          acceptInteger: {
+            signatures: [
+              { parameters: [{ schema: { type: 'integer' } }], returns: true },
+            ],
+          },
+        },
       },
     });
 
-    expect(diagnostics).toHaveLength(0);
+    expect(
+      diagnostics.some((diagnostic) =>
+        diagnostic.message.includes('Type mismatch: argument')
+      )
+    ).toBe(true);
   });
 
   it('disables the whole runtime for an unresolved reachable reference', () => {
     const issues: { code: string }[] = [];
-    const diagnostics = lint('user', {
-      runtime: { globals: { user: { $ref: 'missing/schema' } } },
+    const diagnostics = lint('user + available', {
+      runtime: {
+        globals: {
+          user: { $ref: 'missing/schema' },
+          available: { type: 'string' },
+        },
+      },
       onRuntimeIssues: (next) => issues.push(...next),
     });
     expect(issues.some((issue) => issue.code === 'unresolved-reference')).toBe(
       true
     );
     expect(
-      diagnostics.some((diagnostic) =>
-        diagnostic.message.includes('Unknown symbol')
+      diagnostics.some(
+        (diagnostic) =>
+          diagnostic.message.includes('Unknown symbol') &&
+          diagnostic.message.includes('user')
+      )
+    ).toBe(true);
+    expect(
+      diagnostics.some(
+        (diagnostic) =>
+          diagnostic.message.includes('Unknown symbol') &&
+          diagnostic.message.includes('available')
       )
     ).toBe(true);
   });
@@ -138,7 +188,7 @@ describe('runtime semantic edge cases', () => {
   });
 
   it('decodes escaped local reference segments during semantic analysis', () => {
-    const diagnostics = lint('value.name', {
+    const diagnostics = lint('acceptString(value.name)', {
       runtime: {
         globals: {
           value: {
@@ -152,10 +202,21 @@ describe('runtime semantic edge cases', () => {
             properties: { name: { $ref: '#/definitions/a~1b' } },
           },
         },
+        functions: {
+          acceptString: {
+            signatures: [
+              { parameters: [{ schema: { type: 'string' } }], returns: true },
+            ],
+          },
+        },
       },
     });
 
-    expect(diagnostics).toHaveLength(0);
+    expect(
+      diagnostics.some((diagnostic) =>
+        diagnostic.message.includes('Type mismatch: argument')
+      )
+    ).toBe(true);
   });
 
   it('preserves external roots through inferred lists, objects, and allOf', () => {
@@ -188,30 +249,47 @@ describe('runtime semantic edge cases', () => {
     });
     expect(
       listDiagnostics.filter((diagnostic) =>
-        diagnostic.message.includes('argument')
+        diagnostic.message.includes('Type mismatch: argument')
       )
     ).toHaveLength(1);
 
-    const objectDiagnostics = lint('({child: user.child}).child.name', {
-      runtime: {
-        schemas: {
-          'catalog/user': {
-            type: 'object',
-            definitions: {
-              Child: {
-                type: 'object',
-                properties: { name: { type: 'string' } },
+    const objectDiagnostics = lint(
+      'acceptInteger(({child: user.child}).child.name)',
+      {
+        runtime: {
+          schemas: {
+            'catalog/user': {
+              type: 'object',
+              definitions: {
+                Child: {
+                  type: 'object',
+                  properties: { name: { type: 'string' } },
+                },
               },
+              properties: { child: { $ref: '#/definitions/Child' } },
             },
-            properties: { child: { $ref: '#/definitions/Child' } },
+          },
+          globals: { user: { $ref: 'catalog/user' } },
+          functions: {
+            acceptInteger: {
+              signatures: [
+                {
+                  parameters: [{ schema: { type: 'integer' } }],
+                  returns: true,
+                },
+              ],
+            },
           },
         },
-        globals: { user: { $ref: 'catalog/user' } },
-      },
-    });
-    expect(objectDiagnostics).toHaveLength(0);
+      }
+    );
+    expect(
+      objectDiagnostics.some((diagnostic) =>
+        diagnostic.message.includes('Type mismatch: argument')
+      )
+    ).toBe(true);
 
-    const allOfDiagnostics = lint('value.child.name', {
+    const allOfDiagnostics = lint('acceptInteger(value.child.name)', {
       runtime: {
         schemas: {
           'catalog/first': {
@@ -234,9 +312,23 @@ describe('runtime semantic edge cases', () => {
             allOf: [{ $ref: 'catalog/first' }, { $ref: 'catalog/second' }],
           },
         },
+        functions: {
+          acceptInteger: {
+            signatures: [
+              {
+                parameters: [{ schema: { type: 'integer' } }],
+                returns: true,
+              },
+            ],
+          },
+        },
       },
     });
-    expect(allOfDiagnostics).toHaveLength(0);
+    expect(
+      allOfDiagnostics.some((diagnostic) =>
+        diagnostic.message.includes('Type mismatch: argument')
+      )
+    ).toBe(true);
   });
 
   it('reports invalid falsy and non-cloneable runtime roots', () => {
@@ -299,6 +391,11 @@ describe('runtime semantic edge cases', () => {
         d.message.includes('arity')
       )
     ).toBe(true);
+    expect(
+      lint('choose(true)', { runtime }).some((d) =>
+        d.message.includes('Type mismatch: argument')
+      )
+    ).toBe(true);
     expect(lint('1.abs()', { runtime })).toHaveLength(0);
   });
 
@@ -306,9 +403,7 @@ describe('runtime semantic edge cases', () => {
     const diagnostics = lint("({'get': x -> x + x}.get)('get')", {
       runtime: {},
     });
-    expect(
-      diagnostics.filter((d) => d.message.includes('not callable'))
-    ).toHaveLength(0);
+    expect(diagnostics).toHaveLength(0);
   });
 
   it('handles closed objects, dynamic keys, lists, and union members', () => {

@@ -416,7 +416,12 @@ describe('runtime-aware semantics', () => {
 
     expect(lint('acceptInteger({id: text})', options)).toHaveLength(1);
     expect(lint('acceptRequired({id: text})', options)).toHaveLength(0);
-    expect(lint('acceptRequired({})', options)).toHaveLength(1);
+    const missingRequiredProperty = lint('acceptRequired({})', options);
+    expect(
+      missingRequiredProperty.some((diagnostic) =>
+        diagnostic.message.includes('Property "id" is missing from type')
+      )
+    ).toBe(true);
   });
 
   it('rejects broad schemas for const and enum parameters', () => {

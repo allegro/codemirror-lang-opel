@@ -402,6 +402,7 @@ describe('runtime semantic edge cases', () => {
   it('calls a parenthesized callable property without method fallback', () => {
     const diagnostics = lint("({'get': x -> x + x}.get)('get')", {
       runtime: {},
+      warnOnLambdaDefinitions: false,
     });
     expect(diagnostics).toHaveLength(0);
   });

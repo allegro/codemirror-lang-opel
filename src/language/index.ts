@@ -10,7 +10,6 @@ import {
 } from '@codemirror/language';
 import { autocompletion } from '@codemirror/autocomplete';
 import { opelCompletions } from '../autocomplete';
-import type { OpelOptions } from '../types';
 import { OPEL_KEYWORDS } from '../syntax/constants';
 import { OPEL_NODE_NAMES as NODE } from '../syntax/nodes';
 
@@ -67,8 +66,7 @@ export const opelLanguage = LRLanguage.define({
 });
 
 /// OPEL language support with autocomplete.
-/// The options argument is retained for callers; lint options belong to opelLinter or opelExtensions.
-export function opel(_options: OpelOptions = {}) {
+export function opel() {
   return new LanguageSupport(opelLanguage, [
     autocompletion({
       override: [opelCompletions()],

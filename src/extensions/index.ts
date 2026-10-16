@@ -10,7 +10,7 @@ export function opelExtensions(
 ): Extension[] {
   const { enableLinter = true, includeLintGutter = true } = options;
 
-  const extensions: Extension[] = [opel(options)];
+  const extensions: Extension[] = [opel()];
 
   if (enableLinter) {
     if (includeLintGutter) {

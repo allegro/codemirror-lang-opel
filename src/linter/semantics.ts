@@ -81,11 +81,10 @@ export function analyzeRuntimeSemantics(
     suppressUnknownIdentifierAt:
       options.suppressUnknownIdentifierAt ?? new Set(),
   };
-  tree.cursor().iterate((node) => {
-    if (node.name === NODE.Body && node.node.parent?.name !== NODE.Body) {
-      analyzeScopeBody(node.node, new Map(), ctx);
-    }
-  });
+  const body = tree.getChild(NODE.Body);
+  if (body) {
+    analyzeScopeBody(body, new Map(), ctx);
+  }
   return ctx.diagnostics;
 }
 
@@ -878,7 +877,11 @@ function availableProperties(
 function availableMethods(receiver: Value, ctx: SemanticContext): string[] {
   const names = new Set<string>();
   for (const type of methodReceivers(receiver, ctx.runtime)) {
-    const methods = ctx.runtime.methods?.[type];
+    const methods =
+      ctx.runtime.methods &&
+      Object.prototype.hasOwnProperty.call(ctx.runtime.methods, type)
+        ? ctx.runtime.methods[type]
+        : undefined;
     if (methods) {
       Object.keys(methods).forEach((name) => names.add(name));
     }
@@ -973,14 +976,14 @@ function objectConstraintMessage(
   const object = schemaObject(schema)!;
   const required = Array.isArray(object.required) ? object.required : [];
   const missing = required.find(
-    (name) => !(name in (value.literal as Record<string, unknown>))
+    (name) => !Object.prototype.hasOwnProperty.call(value.literal, name)
   );
   if (missing) {
     return `Property "${missing}" is missing from type ${valueDescription(value, ctx)}.`;
   }
   if (object.additionalProperties === false && isRecord(object.properties)) {
     const extra = Object.keys(value.literal as Record<string, unknown>).find(
-      (name) => !(name in (object.properties as Record<string, unknown>))
+      (name) => !Object.prototype.hasOwnProperty.call(object.properties, name)
     );
     if (extra) {
       return `Object literal may only specify known properties, and "${extra}" does not exist in type ${schemaDescription(schema, schema, ctx.runtime)}.`;
@@ -1026,7 +1029,7 @@ function analyzeCall(
     signature.parameters.every(
       (parameter, index) =>
         !args[index] ||
-        isValueCompatibleWithSchema(
+        isCompatibleOrAlreadyErrored(
           args[index],
           parameter.schema,
           parameter.schema,
@@ -1047,7 +1050,7 @@ function analyzeCall(
         const mismatchDetails = arityCompatible.map((signature) => {
           const mismatchIndex = argNodes.findIndex(
             (arg, index) =>
-              !isValueCompatibleWithSchema(
+              !isCompatibleOrAlreadyErrored(
                 args[index],
                 signature.parameters[index].schema,
                 signature.parameters[index].schema,
@@ -1187,7 +1190,11 @@ function namedMethodReceivers(
         ? []
         : namedMethodReceivers(resolved.schema, resolved.root, runtime, seen);
     }
-    const target = runtime.schemas?.[schema.$ref];
+    const target =
+      runtime.schemas &&
+      Object.prototype.hasOwnProperty.call(runtime.schemas, schema.$ref)
+        ? runtime.schemas[schema.$ref]
+        : undefined;
     if (
       target === undefined ||
       PRIMITIVE_METHOD_RECEIVERS.includes(
@@ -1236,9 +1243,15 @@ function resolveMethod(
   ctx: SemanticContext
 ): OpelCallable | null {
   for (const type of methodReceivers(receiver, ctx.runtime)) {
-    const callable = ctx.runtime.methods?.[type]?.[name];
-    if (callable) {
-      return callable;
+    const methods = ctx.runtime.methods;
+    if (methods && Object.prototype.hasOwnProperty.call(methods, type)) {
+      const registrations = methods[type];
+      if (
+        registrations &&
+        Object.prototype.hasOwnProperty.call(registrations, name)
+      ) {
+        return registrations[name] ?? null;
+      }
     }
   }
   return null;
@@ -1279,8 +1292,9 @@ function resolvePropertyAccess(
       continue;
     }
     const properties = isRecord(object.properties) ? object.properties : {};
+    const hasProperty = Object.prototype.hasOwnProperty.call(properties, name);
     const propertySchemas = [
-      ...(name in properties ? [properties[name] as OpelSchema] : []),
+      ...(hasProperty ? [properties[name] as OpelSchema] : []),
       ...matchingPatternProperties(object, name),
     ];
     if (propertySchemas.length > 0) {
@@ -1300,7 +1314,7 @@ function resolvePropertyAccess(
       addDeprecation(
         ctx,
         node,
-        name in properties
+        hasProperty
           ? (schemaObject(properties[name] as OpelSchema)?.deprecated as
               | boolean
               | string
@@ -1369,16 +1383,19 @@ function lookupIdentifier(
   if (localBinding) {
     return localBinding;
   }
-  const schema = ctx.runtime.globals?.[name];
-  if (schema !== undefined) {
+  const globals = ctx.runtime.globals;
+  if (globals && Object.prototype.hasOwnProperty.call(globals, name)) {
+    const schema = globals[name];
     return { schema, root: schema };
   }
-  const callable = ctx.runtime.functions?.[name];
-  return callable ? callableValue(callable) : undefined;
+  const functions = ctx.runtime.functions;
+  return functions && Object.prototype.hasOwnProperty.call(functions, name)
+    ? callableValue(functions[name])
+    : undefined;
 }
 
 // A failed expression must not produce another argument-type error.
-function isValueCompatibleWithSchema(
+function isCompatibleOrAlreadyErrored(
   value: Value,
   schema: OpelSchema,
   root: OpelSchema,

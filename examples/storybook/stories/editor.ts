@@ -45,7 +45,7 @@ function createStorySource({
     return `const opelCode = ${toTemplateLiteral(doc)};\n\n${runtimeDeclaration}const extensions = opelExtensions(${runtime ? '{ runtime }' : ''});`;
   }
 
-  return `const opelCode = ${toTemplateLiteral(doc)};\n\n${runtimeDeclaration}const extensions = [\n  opel(${runtime ? '{ runtime }' : ''}),\n];`;
+  return `const opelCode = ${toTemplateLiteral(doc)};\n\nconst extensions = [\n  opel(),\n];`;
 }
 
 /** Creates a self-contained CodeMirror editor element for use in stories. */

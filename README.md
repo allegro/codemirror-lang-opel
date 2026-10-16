@@ -127,7 +127,7 @@ A method receiver can be a primitive type such as `string` or `integer`, or the 
 
 ### Prerequisites
 
-Node ≥ 22 and npm ≥ 10.
+Node ≥ 22.13 and npm ≥ 10 for development. The published package supports Node ≥ 22.
 
 ### Start dev mode
 

@@ -96,7 +96,8 @@ function validateSchema(
   root: Record<string, unknown>,
   schemas: Record<string, unknown>,
   issues: OpelRuntimeIssue[],
-  active = new Set<unknown>()
+  active = new Set<unknown>(),
+  expanding = new Set<unknown>()
 ): void {
   if (schema === true) {
     return;
@@ -110,11 +111,18 @@ function validateSchema(
     );
     return;
   }
-  // A schema graph may be recursive; active nodes stop validation without imposing a depth limit.
+  if (expanding.has(schema)) {
+    issues.push(
+      issue('invalid-schema', path, 'schema composition contains a cycle')
+    );
+    return;
+  }
+  // Property and item recursion is valid; active nodes stop that traversal.
   if (active.has(schema)) {
     return;
   }
   active.add(schema);
+  expanding.add(schema);
   addMetadataIssues(schema, path, issues);
 
   if ('$ref' in schema) {
@@ -130,7 +138,11 @@ function validateSchema(
           : parts[0] === '$defs'
             ? root.$defs
             : undefined;
-      const target = isRecord(definitions) ? definitions[parts[1]] : undefined;
+      const target =
+        isRecord(definitions) &&
+        Object.prototype.hasOwnProperty.call(definitions, parts[1])
+          ? definitions[parts[1]]
+          : undefined;
       if (parts.length !== 2 || target === undefined) {
         issues.push(
           issue(
@@ -140,9 +152,17 @@ function validateSchema(
           )
         );
       } else {
-        validateSchema(target, `${path}/$ref`, root, schemas, issues, active);
+        validateSchema(
+          target,
+          `${path}/$ref`,
+          root,
+          schemas,
+          issues,
+          active,
+          expanding
+        );
       }
-    } else if (!(schema.$ref in schemas)) {
+    } else if (!Object.prototype.hasOwnProperty.call(schemas, schema.$ref)) {
       issues.push(
         issue(
           'unresolved-reference',
@@ -157,11 +177,31 @@ function validateSchema(
         schemas[schema.$ref] as Record<string, unknown>,
         schemas,
         issues,
-        active
+        active,
+        expanding
       );
     }
   }
 
+  validateSchemaKeywords(schema, path, issues);
+  validateSchemaChildren(
+    schema,
+    path,
+    root,
+    schemas,
+    issues,
+    active,
+    expanding
+  );
+  expanding.delete(schema);
+  active.delete(schema);
+}
+
+function validateSchemaKeywords(
+  schema: Record<string, unknown>,
+  path: string,
+  issues: OpelRuntimeIssue[]
+): void {
   if ('type' in schema) {
     const types = Array.isArray(schema.type) ? schema.type : [schema.type];
     if (
@@ -228,7 +268,17 @@ function validateSchema(
       }
     }
   }
+}
 
+function validateSchemaChildren(
+  schema: Record<string, unknown>,
+  path: string,
+  root: Record<string, unknown>,
+  schemas: Record<string, unknown>,
+  issues: OpelRuntimeIssue[],
+  active: Set<unknown>,
+  expanding: Set<unknown>
+): void {
   for (const key of [
     'properties',
     'patternProperties',
@@ -243,7 +293,8 @@ function validateSchema(
           root,
           schemas,
           issues,
-          active
+          active,
+          new Set()
         );
       }
     }
@@ -263,7 +314,15 @@ function validateSchema(
       );
       continue;
     }
-    validateSchema(value, `${path}/${key}`, root, schemas, issues, active);
+    validateSchema(
+      value,
+      `${path}/${key}`,
+      root,
+      schemas,
+      issues,
+      active,
+      new Set()
+    );
   }
   for (const key of ['oneOf', 'anyOf', 'allOf']) {
     if (key in schema && !Array.isArray(schema[key])) {
@@ -279,7 +338,8 @@ function validateSchema(
           root,
           schemas,
           issues,
-          active
+          active,
+          expanding
         )
       );
     }
@@ -427,6 +487,15 @@ export function createRuntimeContext(
     );
   }
 
+  for (const name of Object.keys(schemas)) {
+    validateSchema(
+      schemas[name],
+      `/schemas/${pointerSegment(name)}`,
+      schemas[name] as Record<string, unknown>,
+      schemas,
+      issues
+    );
+  }
   for (const name of Object.keys(globals)) {
     validateSchema(
       globals[name],
@@ -481,7 +550,7 @@ export function createRuntimeContext(
     }
   }
   for (const name of Object.keys(globals)) {
-    if (name in functions) {
+    if (Object.prototype.hasOwnProperty.call(functions, name)) {
       issues.push(
         issue(
           'duplicate-symbol',

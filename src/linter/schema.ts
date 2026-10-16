@@ -96,14 +96,21 @@ export function resolveSchemaReference(
     const [section, name] = ref.slice(2).split('/').map(decodePointerSegment);
     const rootObject = schemaObject(effectiveRoot);
     const definitions = rootObject?.[section];
-    if (isRecord(definitions) && name in definitions) {
+    if (
+      isRecord(definitions) &&
+      Object.prototype.hasOwnProperty.call(definitions, name)
+    ) {
       const target = definitions[name] as OpelSchema;
       rememberSchemaRoot(target, effectiveRoot);
       return resolveSchemaReference(target, effectiveRoot, runtime, seen);
     }
     return { schema: false, root: effectiveRoot };
   }
-  const external = runtime.schemas?.[ref];
+  const external =
+    runtime.schemas &&
+    Object.prototype.hasOwnProperty.call(runtime.schemas, ref)
+      ? runtime.schemas[ref]
+      : undefined;
   if (external === undefined) {
     return { schema: false, root: effectiveRoot };
   }
@@ -157,6 +164,65 @@ export function combineSchemaValues(
   return result;
 }
 
+type StructuralSchema = { object: Record<string, unknown>; root: OpelSchema };
+
+// Sibling constraints on the allOf owner are not an additional property branch.
+function mergeNamedProperties(
+  structuralSchemas: StructuralSchema[],
+  root: OpelSchema,
+  runtime: OpelRuntime
+): Record<string, OpelSchema> {
+  const properties: Record<string, OpelSchema> = Object.create(null);
+  const propertySources = structuralSchemas.filter(
+    ({ object }) => !OWN_SCHEMA_CONSTRAINTS.has(object)
+  );
+  const propertyNames = new Set<string>();
+  for (const { object } of propertySources) {
+    if (isRecord(object.properties)) {
+      Object.keys(object.properties).forEach((name) => propertyNames.add(name));
+    }
+  }
+  for (const name of propertyNames) {
+    const constraints: OpelSchema[] = [];
+    let forbidden = false;
+    for (const { object, root: branchRoot } of propertySources) {
+      const explicit =
+        isRecord(object.properties) &&
+        Object.prototype.hasOwnProperty.call(object.properties, name)
+          ? object.properties[name]
+          : undefined;
+      const patterns = matchingPatternProperties(object, name);
+      if (explicit !== undefined) {
+        const child = explicit as OpelSchema;
+        rememberSchemaRoot(child, schemaRootFor(child, branchRoot));
+        constraints.push(child);
+      } else if (patterns.length > 0) {
+        for (const pattern of patterns) {
+          rememberSchemaRoot(pattern, schemaRootFor(pattern, branchRoot));
+          constraints.push(pattern);
+        }
+      } else if (object.additionalProperties === false) {
+        forbidden = true;
+        break;
+      } else if (
+        object.additionalProperties &&
+        object.additionalProperties !== true
+      ) {
+        const extra = object.additionalProperties as OpelSchema;
+        rememberSchemaRoot(extra, schemaRootFor(extra, branchRoot));
+        constraints.push(extra);
+      }
+    }
+    if (!forbidden && constraints.length > 0) {
+      const combined = combineSchemaValues(constraints, root, runtime);
+      if (combined !== false) {
+        properties[name] = combined;
+      }
+    }
+  }
+  return properties;
+}
+
 // Merge one concrete combination of allOf alternatives.
 function mergeSchemaConstraints(
   schemas: OpelSchema[],
@@ -201,13 +267,10 @@ function mergeSchemaConstraints(
       object: schemaObject(schema),
       root: schemaRootFor(schema, root),
     }))
-    .filter(
-      (entry): entry is { object: Record<string, unknown>; root: OpelSchema } =>
-        entry.object !== null
-    );
-  const properties: Record<string, OpelSchema> = {};
+    .filter((entry): entry is StructuralSchema => entry.object !== null);
+  const properties = mergeNamedProperties(structuralSchemas, root, runtime);
   const required = new Set<string>();
-  const patterns: Record<string, OpelSchema> = {};
+  const patterns: Record<string, OpelSchema> = Object.create(null);
   let hasAdditionalProperties = false;
   let additionalProperties: boolean | OpelSchema = true;
   const itemSchemas: OpelSchema[] = [];
@@ -218,53 +281,6 @@ function mergeSchemaConstraints(
         if (typeof name === 'string') {
           required.add(name);
         }
-      }
-    }
-  }
-
-  // Sibling constraints on the allOf owner are not an additional property branch.
-  const propertySources = structuralSchemas.filter(
-    ({ object }) => !OWN_SCHEMA_CONSTRAINTS.has(object)
-  );
-  const propertyNames = new Set<string>();
-  for (const { object } of propertySources) {
-    if (isRecord(object.properties)) {
-      Object.keys(object.properties).forEach((name) => propertyNames.add(name));
-    }
-  }
-  for (const name of propertyNames) {
-    const constraints: OpelSchema[] = [];
-    let forbidden = false;
-    for (const { object, root: branchRoot } of propertySources) {
-      const explicit = isRecord(object.properties)
-        ? object.properties[name]
-        : undefined;
-      const patterns = matchingPatternProperties(object, name);
-      if (explicit !== undefined) {
-        const child = explicit as OpelSchema;
-        rememberSchemaRoot(child, schemaRootFor(child, branchRoot));
-        constraints.push(child);
-      } else if (patterns.length > 0) {
-        for (const pattern of patterns) {
-          rememberSchemaRoot(pattern, schemaRootFor(pattern, branchRoot));
-          constraints.push(pattern);
-        }
-      } else if (object.additionalProperties === false) {
-        forbidden = true;
-        break;
-      } else if (
-        object.additionalProperties &&
-        object.additionalProperties !== true
-      ) {
-        const extra = object.additionalProperties as OpelSchema;
-        rememberSchemaRoot(extra, schemaRootFor(extra, branchRoot));
-        constraints.push(extra);
-      }
-    }
-    if (!forbidden && constraints.length > 0) {
-      const combined = combineSchemaValues(constraints, root, runtime);
-      if (combined !== false) {
-        properties[name] = combined;
       }
     }
   }
@@ -333,8 +349,24 @@ function mergeSchemaConstraints(
     merged.type = 'array';
   }
 
-  // Intersect literal constraints, then remove enum members outside the types.
-  const constValues = constrained
+  return mergeLiteralConstraints(
+    constrained,
+    intersection,
+    knownTypeSets.length > 0,
+    merged
+  )
+    ? merged
+    : false;
+}
+
+// Intersect literal constraints, then remove enum members outside the types.
+function mergeLiteralConstraints(
+  schemas: OpelSchema[],
+  types: string[],
+  hasKnownTypes: boolean,
+  merged: Record<string, unknown>
+): boolean {
+  const constValues = schemas
     .map((schema) => schemaObject(schema)?.const)
     .filter((value) => value !== undefined);
   if (
@@ -347,7 +379,7 @@ function mergeSchemaConstraints(
     merged.const = constValues[0];
   }
 
-  const enumValues = constrained
+  const enumValues = schemas
     .map((schema) => schemaObject(schema)?.enum)
     .filter((value): value is unknown[] => Array.isArray(value));
   if (enumValues.length > 0) {
@@ -363,9 +395,9 @@ function mergeSchemaConstraints(
     if (allowed.length === 0) {
       return false;
     }
-    if (knownTypeSets.length > 0) {
+    if (hasKnownTypes) {
       allowed = allowed.filter((value) =>
-        intersection.some(
+        types.some(
           (type) =>
             type === valueType(value) ||
             (type === 'number' && valueType(value) === 'integer')
@@ -379,8 +411,7 @@ function mergeSchemaConstraints(
       merged.enum = allowed;
     }
   }
-
-  return merged;
+  return true;
 }
 
 // ponytail: Cartesian expansion grows with branch combinations; use lazy combinations
@@ -416,20 +447,28 @@ function intersectSchemaAlternatives(
 export function resolveSchemaVariants(
   schema: OpelSchema,
   root: OpelSchema,
-  runtime: OpelRuntime
+  runtime: OpelRuntime,
+  seen = new Set<OpelSchema>()
 ): SchemaResolution[] {
   const resolved = resolveSchemaReference(schema, root, runtime);
   const object = schemaObject(resolved.schema);
   if (!object || resolved.schema === true || resolved.schema === false) {
     return [resolved];
   }
+  // Runtime validation rejects composition cycles; guard derived schemas too.
+  if (seen.has(resolved.schema)) {
+    return [{ schema: false, root: resolved.root }];
+  }
+  const nextSeen = new Set(seen);
+  nextSeen.add(resolved.schema);
   if (Array.isArray(object.oneOf)) {
     const branchRoots = SCHEMA_BRANCH_ROOTS.get(object);
     return object.oneOf.flatMap((child, index) =>
       resolveSchemaVariants(
         child as OpelSchema,
         branchRoots?.[index] ?? resolved.root,
-        runtime
+        runtime,
+        nextSeen
       )
     );
   }
@@ -439,13 +478,19 @@ export function resolveSchemaVariants(
       resolveSchemaVariants(
         child as OpelSchema,
         branchRoots?.[index] ?? resolved.root,
-        runtime
+        runtime,
+        nextSeen
       )
     );
   }
   if (Array.isArray(object.allOf)) {
     const branches = object.allOf.map((child) =>
-      resolveSchemaVariants(child as OpelSchema, resolved.root, runtime)
+      resolveSchemaVariants(
+        child as OpelSchema,
+        resolved.root,
+        runtime,
+        nextSeen
+      )
     );
     const ownConstraints = { ...object };
     delete ownConstraints.allOf;

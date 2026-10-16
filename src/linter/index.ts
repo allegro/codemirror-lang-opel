@@ -121,7 +121,7 @@ export function opelLinter(options: OpelOptions = {}) {
     const scanScopeStack: number[] = [];
 
     tree.cursor().iterate(
-      (node) => {
+      (node: SyntaxNodeRef) => {
         if (isScopeNode(node.name)) {
           const id = scanScopeId++;
           allDeclarationsByScope.set(id, new Map());

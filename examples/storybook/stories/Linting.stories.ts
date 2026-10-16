@@ -55,8 +55,8 @@ empty`,
   }),
 };
 
-export const InvalidArithmeticOperands: StoryObj = {
-  name: 'Arithmetic Type Errors and Valid Expressions',
+export const ArithmeticTypeChecks: StoryObj = {
+  name: 'Arithmetic Type Checks',
   ...createEditorStory({
     doc: `[
   true + false,

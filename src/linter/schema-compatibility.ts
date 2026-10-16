@@ -159,16 +159,24 @@ function isSchemaVariantCompatible(
 
   const sourceItems = sourceObject.items as OpelSchema | undefined;
   const targetItems = targetObject.items as OpelSchema | undefined;
-  return !sourceItems || !targetItems
-    ? true
-    : isSchemaCompatible(
-        sourceItems,
-        targetItems,
-        sourceRoot,
-        targetRoot,
-        runtime,
-        seen
-      );
+  if (
+    targetItems === undefined ||
+    targetItems === true ||
+    sourceItems === false
+  ) {
+    return true;
+  }
+  if (sourceItems === undefined || sourceItems === true) {
+    return false;
+  }
+  return isSchemaCompatible(
+    sourceItems,
+    targetItems,
+    sourceRoot,
+    targetRoot,
+    runtime,
+    seen
+  );
 }
 
 /** Checks declared members, pattern domains, and extra-property domains. */
@@ -208,7 +216,7 @@ function isObjectSchemaCompatible(
   // Explicit properties must satisfy every matching target constraint.
   for (const [name, sourceProperty] of Object.entries(sourceProperties)) {
     const targetPropertiesForName = [
-      ...(name in targetProperties
+      ...(Object.prototype.hasOwnProperty.call(targetProperties, name)
         ? [targetProperties[name] as OpelSchema]
         : []),
       ...matchingPatternProperties(targetObject, name),
@@ -324,7 +332,7 @@ function isObjectSchemaCompatible(
       targetObject.properties
     )) {
       if (
-        !(targetName in sourceProperties) &&
+        !Object.prototype.hasOwnProperty.call(sourceProperties, targetName) &&
         matchingPatternProperties(sourceObject, targetName).length === 0 &&
         !isSchemaCompatible(
           sourceObject.additionalProperties as OpelSchema,
@@ -461,12 +469,18 @@ function isObjectCompatibleWithSchema(
   const required = Array.isArray(schema.required) ? schema.required : [];
   const properties = isRecord(schema.properties) ? schema.properties : {};
   const literal = value.literal as Record<string, unknown>;
-  if (required.some((name) => !(name in literal))) {
+  if (
+    required.some(
+      (name) => !Object.prototype.hasOwnProperty.call(literal, name)
+    )
+  ) {
     return false;
   }
   for (const [name, child] of Object.entries(literal)) {
     const propertySchemas = [
-      ...(name in properties ? [properties[name] as OpelSchema] : []),
+      ...(Object.prototype.hasOwnProperty.call(properties, name)
+        ? [properties[name] as OpelSchema]
+        : []),
       ...matchingPatternProperties(schema, name),
     ];
     if (

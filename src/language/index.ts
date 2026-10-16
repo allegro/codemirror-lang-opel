@@ -66,7 +66,8 @@ export const opelLanguage = LRLanguage.define({
   },
 });
 
-/// OPEL language support with optional configuration.
+/// OPEL language support with autocomplete.
+/// The options argument is retained for callers; lint options belong to opelLinter or opelExtensions.
 export function opel(_options: OpelOptions = {}) {
   return new LanguageSupport(opelLanguage, [
     autocompletion({

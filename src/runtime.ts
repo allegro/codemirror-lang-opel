@@ -8,6 +8,7 @@ import type {
 } from './types';
 
 const EMPTY_RUNTIME: OpelRuntime = Object.freeze({});
+export const MAX_SCHEMA_DEPTH = 128;
 
 export interface RuntimeContext {
   readonly runtime: OpelRuntime;
@@ -119,6 +120,16 @@ function validateSchema(
   }
   // Property and item recursion is valid; active nodes stop that traversal.
   if (active.has(schema)) {
+    return;
+  }
+  if (active.size >= MAX_SCHEMA_DEPTH) {
+    issues.push(
+      issue(
+        'invalid-schema',
+        path,
+        `schema exceeds maximum depth of ${MAX_SCHEMA_DEPTH}`
+      )
+    );
     return;
   }
   active.add(schema);

@@ -1,4 +1,5 @@
 import type { OpelPrimitive, OpelRuntime, OpelSchema } from '../types';
+import { MAX_SCHEMA_DEPTH } from '../runtime';
 import {
   getSchemaTypes,
   isRecord,
@@ -46,6 +47,10 @@ function isSchemaCompatible(
       ([source, target]) => source === sourceSchema && target === targetSchema
     )
   ) {
+    return true;
+  }
+  // Deeper comparisons are unknown; avoid a false type error.
+  if (seen.length >= MAX_SCHEMA_DEPTH) {
     return true;
   }
 

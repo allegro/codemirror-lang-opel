@@ -123,6 +123,8 @@ readSetting('theme', 'dark')
 
 A method receiver can be a primitive type such as `string` or `integer`, or the exact name of a schema in `runtime.schemas`. Returning the same `$ref` preserves the named type for chained calls.
 
+Schema validation allows recursive `$ref` properties but rejects paths deeper than 128 schema objects. Compatibility comparisons beyond 128 distinct recursive pairs are treated as unknown.
+
 ## Development
 
 ### Prerequisites

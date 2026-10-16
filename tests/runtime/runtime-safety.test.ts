@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { OpelSchema } from '../../src/types';
 import { lint } from '../support/test-utils';
 
 describe('runtime semantic safety', () => {
@@ -132,5 +133,35 @@ describe('runtime semantic safety', () => {
       onRuntimeIssues: (next) => issues.push(...next),
     });
     expect(issues).toHaveLength(0);
+  });
+
+  it('reports overly deep schemas instead of overflowing the stack', () => {
+    let deep: OpelSchema = { type: 'integer' };
+    for (let index = 0; index < 127; index++) {
+      deep = { type: 'object', properties: { next: deep } };
+    }
+
+    const withinLimitIssues: { code: string }[] = [];
+    lint('1', {
+      runtime: { schemas: { Deep: deep } },
+      onRuntimeIssues: (next) => withinLimitIssues.push(...next),
+    });
+    expect(withinLimitIssues).toHaveLength(0);
+
+    deep = { type: 'object', properties: { next: deep } };
+
+    const issues: { code: string; message: string }[] = [];
+    expect(() =>
+      lint('1', {
+        runtime: { schemas: { Deep: deep } },
+        onRuntimeIssues: (next) => issues.push(...next),
+      })
+    ).not.toThrow();
+    expect(issues).toContainEqual(
+      expect.objectContaining({
+        code: 'invalid-schema',
+        message: 'schema exceeds maximum depth of 128',
+      })
+    );
   });
 });

@@ -129,7 +129,7 @@ Schema validation allows recursive `$ref` properties but rejects paths deeper th
 
 ### Prerequisites
 
-Node ≥ 22.13 and npm ≥ 10 for development. The published package supports Node ≥ 22.
+Node ≥ 24.19.0 and npm ≥ 11.17.0 for development. The published package supports Node ≥ 24.19.0.
 
 ### Start dev mode
 

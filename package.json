@@ -85,5 +85,12 @@
   "engines": {
     "node": ">=22",
     "npm": ">=10"
+  },
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": ">=22.13.0",
+      "onFail": "error"
+    }
   }
 }

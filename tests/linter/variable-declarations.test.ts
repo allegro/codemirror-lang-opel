@@ -19,23 +19,23 @@ describe('variable declaration order', () => {
     ).toHaveLength(0);
   });
 
-  it('keeps "not declared" for truly missing variables', () => {
+  it('reports unknown symbols through semantic analysis', () => {
     const diagnostics = lint('missing + 1');
     expect(
-      diagnostics.filter((d) => d.message.includes('is not declared'))
+      diagnostics.filter((d) => d.message.includes('Unknown symbol'))
     ).toHaveLength(1);
   });
 
   it('allows runtime globals passed in options', () => {
     const diagnostics = lint('runtimeVar + 1', {
-      runtimeGlobals: ['runtimeVar'],
+      runtime: { globals: { runtimeVar: true } },
     });
     expect(
       diagnostics.filter((d) => d.message.includes('runtimeVar'))
     ).toHaveLength(0);
   });
 
-  it('does not treat function call names as undeclared variables', () => {
+  it('reports unknown function calls through semantic analysis', () => {
     const diagnostics = lint("identity('x')");
     expect(
       diagnostics.filter(
@@ -43,6 +43,9 @@ describe('variable declaration order', () => {
           d.message.includes('identity') && d.message.includes('not declared')
       )
     ).toHaveLength(0);
+    expect(diagnostics.some((d) => d.message.includes('Unknown function'))).toBe(
+      true
+    );
   });
 
   it('does not treat method call names on values as undeclared variables', () => {

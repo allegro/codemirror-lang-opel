@@ -100,10 +100,7 @@ function validateSchema(
   active = new Set<unknown>(),
   expanding = new Set<unknown>()
 ): void {
-  if (schema === true) {
-    return;
-  }
-  if (schema === false) {
+  if (schema === true || schema === false) {
     return;
   }
   if (!isRecord(schema)) {

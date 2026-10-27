@@ -40,7 +40,7 @@ describe('runtime semantic safety', () => {
     ).toBe(true);
     expect(
       lint('user.toString', { runtime }).some((diagnostic) =>
-        diagnostic.message.includes('Unknown property')
+        diagnostic.message.includes('Property "toString" is not defined')
       )
     ).toBe(true);
   });

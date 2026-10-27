@@ -865,12 +865,24 @@ function availableProperties(
 ): string[] {
   const names = new Set<string>();
   for (const variant of resolveSchemaVariants(schema, root, ctx.runtime)) {
-    const properties = schemaObject(variant)?.properties;
+    const properties = schemaObject(variant.schema)?.properties;
     if (isRecord(properties)) {
       Object.keys(properties).forEach((name) => names.add(name));
     }
   }
   return [...names].sort();
+}
+
+function schemaDisplayName(
+  schema: OpelSchema,
+  runtime: OpelRuntime
+): string | undefined {
+  const reference = schemaObject(schema)?.$ref;
+  return typeof reference === 'string' &&
+    runtime.schemas &&
+    Object.prototype.hasOwnProperty.call(runtime.schemas, reference)
+    ? reference
+    : undefined;
 }
 
 // Use the same receiver kinds as dispatch, including integer-to-number inheritance.
@@ -893,6 +905,42 @@ function formatNames(names: string[]): string {
   return names.length > 0
     ? names.map((name) => `"${name}"`).join(', ')
     : 'none';
+}
+
+function formatAvailableProperties(names: string[]): string {
+  if (names.length === 0) {
+    return 'No properties are available.';
+  }
+  const shown = names.slice(0, 5);
+  const remaining = names.length - shown.length;
+  const more = remaining > 0 ? ` (+${remaining} more)` : '';
+  return `Available properties: ${formatNames(shown)}${more}.`;
+}
+
+function propertySuggestion(name: string, names: string[]): string | null {
+  const normalizedName = name.toLowerCase();
+  const matches = names
+    .filter((candidate) => {
+      const normalizedCandidate = candidate.toLowerCase();
+      return (
+        normalizedCandidate !== normalizedName &&
+        (normalizedName.startsWith(normalizedCandidate) ||
+          normalizedCandidate.startsWith(normalizedName))
+      );
+    })
+    .slice(0, 3);
+  if (matches.length === 1) {
+    return `Did you mean "${matches[0]}"?`;
+  }
+  return matches.length > 1
+    ? `Similar properties: ${formatNames(matches)}.`
+    : null;
+}
+
+function formatPropertyHint(name: string, names: string[]): string {
+  const suggestion = propertySuggestion(name, names);
+  const prefix = suggestion ? `${suggestion} ` : '';
+  return `${prefix}${formatAvailableProperties(names)}`;
 }
 
 function readLiteralValue(
@@ -1257,7 +1305,7 @@ function resolveMethod(
   return null;
 }
 
-// Track supporting and unsupported branches separately to distinguish partial access from absence.
+// Distinguish explicit property support from permissive inference fallbacks.
 function resolvePropertyAccess(
   receiver: Value,
   name: string,
@@ -1268,6 +1316,7 @@ function resolvePropertyAccess(
     return { schema: true };
   }
   const supports: Value[] = [];
+  let hasExplicitSupport = false;
   let unsupported = 0;
   const receiverRoot = schemaRoot(receiver);
   for (const resolution of resolveSchemaVariants(
@@ -1298,6 +1347,7 @@ function resolvePropertyAccess(
       ...matchingPatternProperties(object, name),
     ];
     if (propertySchemas.length > 0) {
+      hasExplicitSupport = true;
       const schema =
         propertySchemas.length === 1
           ? propertySchemas[0]
@@ -1335,6 +1385,8 @@ function resolvePropertyAccess(
       } else {
         if (object.additionalProperties === undefined) {
           unsupported++;
+        } else {
+          hasExplicitSupport = true;
         }
         const schema =
           object.additionalProperties && object.additionalProperties !== true
@@ -1347,18 +1399,21 @@ function resolvePropertyAccess(
       }
     }
   }
-  if (supports.length === 0 && unsupported > 0) {
-    addDiagnostic(
-      node,
-      'error',
-      `Unknown property "${name}" on type ${schemaDescription(receiver.schema, schemaRoot(receiver), ctx.runtime)}. Available properties: ${formatNames(availableProperties(receiver.schema, ctx, schemaRoot(receiver)))}.`,
-      ctx.diagnostics
+  if (unsupported > 0) {
+    const schemaName = schemaDisplayName(receiver.schema, ctx.runtime);
+    const properties = availableProperties(
+      receiver.schema,
+      ctx,
+      schemaRoot(receiver)
     );
-  } else if (unsupported > 0) {
+    const propertyHint = formatPropertyHint(name, properties);
+    const message = hasExplicitSupport
+      ? `Property "${name}" is only defined for some variants${schemaName ? ` of schema "${schemaName}"` : ''}.`
+      : `Property "${name}" is not defined${schemaName ? ` in schema "${schemaName}"` : ''}.`;
     addDiagnostic(
       node,
-      'warning',
-      `Be careful: property "${name}" is not available on every member of type ${schemaDescription(receiver.schema, schemaRoot(receiver), ctx.runtime)}. Available properties: ${formatNames(availableProperties(receiver.schema, ctx, schemaRoot(receiver)))}.`,
+      supports.length === 0 ? 'error' : 'warning',
+      `${message} ${propertyHint}`,
       ctx.diagnostics
     );
   }

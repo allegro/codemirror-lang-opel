@@ -68,6 +68,157 @@ describe('runtime-aware semantics', () => {
     expect(localUnknown[0].message).toContain('Did you mean: user?');
   });
 
+  it('suggests a similar property without printing its expanded schema', () => {
+    const diagnostics = lint('pageSettings().banners', {
+      runtime: {
+        functions: {
+          pageSettings: {
+            signatures: [
+              {
+                parameters: [],
+                returns: {
+                  type: 'object',
+                  properties: {
+                    banner: {
+                      type: 'object',
+                      properties: {
+                        headline: { type: 'string' },
+                        imagePath: { type: 'string' },
+                        backgroundColor: { type: 'string' },
+                      },
+                    },
+                    compactMode: { type: 'boolean' },
+                    foregroundColor: { type: 'string' },
+                  },
+                },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0].severity).toBe('warning');
+    expect(diagnostics[0].message).toContain(
+      'Property "banners" is not defined. Did you mean "banner"?'
+    );
+    expect(diagnostics[0].message).toContain(
+      'Available properties: "banner", "compactMode", "foregroundColor".'
+    );
+    expect(diagnostics[0].message).not.toContain('headline');
+  });
+
+  it('uses the registered reference name in property diagnostics', () => {
+    const diagnostics = lint("settings('dashboard').themee", {
+      runtime: {
+        functions: {
+          settings: {
+            signatures: [
+              {
+                parameters: [
+                  {
+                    name: 'kind',
+                    schema: { type: 'string', const: 'dashboard' },
+                  },
+                ],
+                returns: { $ref: 'schemas/site-settings' },
+              },
+            ],
+          },
+        },
+        schemas: {
+          'schemas/site-settings': {
+            type: 'object',
+            properties: {
+              theme: {
+                type: 'object',
+                properties: { colors: { type: 'object' } },
+              },
+            },
+            additionalProperties: false,
+          },
+        },
+      },
+    });
+
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0].severity).toBe('error');
+    expect(diagnostics[0].message).toContain(
+      'Property "themee" is not defined in schema "schemas/site-settings".'
+    );
+    expect(diagnostics[0].message).toContain('Did you mean "theme"?');
+    expect(diagnostics[0].message).not.toContain('colors');
+  });
+
+  it.each([
+    ['banners', 'Property "banners" is not defined in schema "page-settings".'],
+    [
+      'banner',
+      'Property "banner" is only defined for some variants of schema "page-settings".',
+    ],
+  ])(
+    'distinguishes missing and partially defined properties: %s',
+    (property, message) => {
+      const diagnostics = lint(`settings.${property}`, {
+        runtime: {
+          globals: { settings: { $ref: 'page-settings' } },
+          schemas: {
+            'page-settings': {
+              oneOf: [
+                { type: 'object', properties: { banner: { type: 'string' } } },
+                { type: 'object', properties: { theme: { type: 'string' } } },
+              ],
+            },
+          },
+        },
+      });
+
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]).toMatchObject({ severity: 'warning' });
+      expect(diagnostics[0].message).toContain(message);
+    }
+  );
+
+  it.each([
+    { type: 'object', additionalProperties: true },
+    { type: 'object', additionalProperties: { type: 'string' } },
+    {
+      type: 'object',
+      patternProperties: { '^custom_': { type: 'string' } },
+      additionalProperties: false,
+    },
+  ] as const)('recognizes explicit dynamic property support: %j', (schema) => {
+    expect(
+      lint('settings.custom_label', {
+        runtime: { globals: { settings: schema } },
+      })
+    ).toHaveLength(0);
+
+    const diagnostics = lint('settings.custom_label', {
+      runtime: {
+        globals: {
+          settings: {
+            oneOf: [
+              schema,
+              {
+                type: 'object',
+                properties: { banner: { type: 'string' } },
+                additionalProperties: false,
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]).toMatchObject({ severity: 'warning' });
+    expect(diagnostics[0].message).toContain(
+      'Property "custom_label" is only defined for some variants.'
+    );
+  });
+
   it('does not duplicate used-before-declaration diagnostics', () => {
     const diagnostics = lint("val a = foo; val foo = 'x'; a", { runtime });
 
@@ -348,28 +499,28 @@ describe('runtime-aware semantics', () => {
     expect(
       commonDiagnostics.filter(
         (diagnostic) =>
-          diagnostic.message.includes('Unknown property') ||
-          diagnostic.message.includes('not available on every member')
+          diagnostic.message.includes('is not defined') ||
+          diagnostic.message.includes('is only defined for some variants')
       )
     ).toHaveLength(0);
     expect(
       nameDiagnostics.filter((diagnostic) =>
-        diagnostic.message.includes('Unknown property')
+        diagnostic.message.includes('is not defined')
       )
     ).toHaveLength(0);
     expect(
       nameDiagnostics.filter((diagnostic) =>
-        diagnostic.message.includes('not available on every member')
+        diagnostic.message.includes('is only defined for some variants')
       )
     ).toHaveLength(1);
     expect(
       idDiagnostics.filter((diagnostic) =>
-        diagnostic.message.includes('Unknown property')
+        diagnostic.message.includes('is not defined')
       )
     ).toHaveLength(0);
     expect(
       idDiagnostics.filter((diagnostic) =>
-        diagnostic.message.includes('not available on every member')
+        diagnostic.message.includes('is only defined for some variants')
       )
     ).toHaveLength(1);
   });
@@ -688,7 +839,7 @@ describe('runtime-aware semantics', () => {
     });
     expect(
       closedDiagnostics.filter((diagnostic) =>
-        diagnostic.message.includes('Unknown property')
+        diagnostic.message.includes('is not defined')
       )
     ).toHaveLength(1);
 
@@ -893,7 +1044,7 @@ describe('runtime-aware semantics', () => {
 
       expect(
         diagnostics.some((diagnostic) =>
-          diagnostic.message.includes('Unknown property "arbitrary"')
+          diagnostic.message.includes('Property "arbitrary" is not defined')
         )
       ).toBe(true);
     }
@@ -908,7 +1059,7 @@ describe('runtime-aware semantics', () => {
 
       expect(
         diagnostics.some((diagnostic) =>
-          diagnostic.message.includes('Unknown property "arbitrary"')
+          diagnostic.message.includes('Property "arbitrary" is not defined')
         )
       ).toBe(true);
     }
@@ -932,7 +1083,7 @@ describe('runtime-aware semantics', () => {
 
     expect(
       diagnostics.some((diagnostic) =>
-        diagnostic.message.includes('Unknown property "arbitrary"')
+        diagnostic.message.includes('Property "arbitrary" is not defined')
       )
     ).toBe(true);
   });
@@ -944,7 +1095,7 @@ describe('runtime-aware semantics', () => {
 
     expect(
       diagnostics.some((diagnostic) =>
-        diagnostic.message.includes('Unknown property "arbitrary"')
+        diagnostic.message.includes('Property "arbitrary" is not defined')
       )
     ).toBe(true);
   });
@@ -989,7 +1140,7 @@ describe('runtime-aware semantics', () => {
       true
     );
     expect(
-      unknownProperty.find((d) => d.message.includes('Unknown property'))
+      unknownProperty.find((d) => d.message.includes('is not defined'))
     ).toMatchObject({ from: 4, to: 12 });
     expect(mismatch).toHaveLength(1);
     expect(mismatch[0].message).toContain(

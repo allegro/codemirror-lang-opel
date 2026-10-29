@@ -443,7 +443,7 @@ export function isValueCompatibleWithSchema(
     }
     if (
       type === 'array' &&
-      variant.items &&
+      variant.items !== undefined &&
       Array.isArray(value.literal) &&
       !value.literal.every((item) =>
         isValueCompatibleWithSchema(

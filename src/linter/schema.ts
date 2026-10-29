@@ -10,6 +10,7 @@ const OWN_SCHEMA_CONSTRAINTS = new WeakSet<object>();
 type SchemaResolution = {
   schema: OpelSchema;
   root: OpelSchema;
+  references?: string[];
 };
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
@@ -115,7 +116,8 @@ export function resolveSchemaReference(
     return { schema: false, root: effectiveRoot };
   }
   rememberSchemaRoot(external, external);
-  return resolveSchemaReference(external, external, runtime, seen);
+  const resolved = resolveSchemaReference(external, external, runtime, seen);
+  return { ...resolved, references: [ref, ...(resolved.references ?? [])] };
 }
 
 // Integer is the overlap of number and integer, not a contradictory type.
@@ -437,7 +439,11 @@ function intersectSchemaAlternatives(
       runtime
     );
     rememberSchemaRoot(schema, effectiveRoot);
-    return { schema, root: effectiveRoot };
+    return {
+      schema,
+      root: effectiveRoot,
+      references: combination.flatMap((item) => item.references ?? []),
+    };
   });
   const possible = merged.filter((item) => item.schema !== false);
   return possible.length > 0 ? possible : [{ schema: false, root }];
@@ -463,24 +469,30 @@ export function resolveSchemaVariants(
   nextSeen.add(resolved.schema);
   if (Array.isArray(object.oneOf)) {
     const branchRoots = SCHEMA_BRANCH_ROOTS.get(object);
-    return object.oneOf.flatMap((child, index) =>
-      resolveSchemaVariants(
-        child as OpelSchema,
-        branchRoots?.[index] ?? resolved.root,
-        runtime,
-        nextSeen
-      )
+    return withSchemaReferences(
+      object.oneOf.flatMap((child, index) =>
+        resolveSchemaVariants(
+          child as OpelSchema,
+          branchRoots?.[index] ?? resolved.root,
+          runtime,
+          nextSeen
+        )
+      ),
+      resolved.references
     );
   }
   if (Array.isArray(object.anyOf)) {
     const branchRoots = SCHEMA_BRANCH_ROOTS.get(object);
-    return object.anyOf.flatMap((child, index) =>
-      resolveSchemaVariants(
-        child as OpelSchema,
-        branchRoots?.[index] ?? resolved.root,
-        runtime,
-        nextSeen
-      )
+    return withSchemaReferences(
+      object.anyOf.flatMap((child, index) =>
+        resolveSchemaVariants(
+          child as OpelSchema,
+          branchRoots?.[index] ?? resolved.root,
+          runtime,
+          nextSeen
+        )
+      ),
+      resolved.references
     );
   }
   if (Array.isArray(object.allOf)) {
@@ -500,9 +512,25 @@ export function resolveSchemaVariants(
         { schema: ownConstraints as OpelSchema, root: resolved.root },
       ]);
     }
-    return intersectSchemaAlternatives(branches, resolved.root, runtime);
+    return withSchemaReferences(
+      intersectSchemaAlternatives(branches, resolved.root, runtime),
+      resolved.references
+    );
   }
   return [resolved];
+}
+
+// Keep named aliases attached to each alternative after resolving its shape.
+function withSchemaReferences(
+  variants: SchemaResolution[],
+  references: string[] | undefined
+): SchemaResolution[] {
+  return references?.length
+    ? variants.map((variant) => ({
+        ...variant,
+        references: [...references, ...(variant.references ?? [])],
+      }))
+    : variants;
 }
 
 // [] means unknown; ['never'] means impossible. Unknown must stay permissive.

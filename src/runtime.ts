@@ -192,6 +192,15 @@ function validateSchema(
   }
 
   validateSchemaKeywords(schema, path, issues);
+  if ('callable' in schema) {
+    validateCallable(
+      schema.callable,
+      `${path}/callable`,
+      schemas,
+      issues,
+      active
+    );
+  }
   validateSchemaChildren(
     schema,
     path,
@@ -210,6 +219,11 @@ function validateSchemaKeywords(
   path: string,
   issues: OpelRuntimeIssue[]
 ): void {
+  if ('enum' in schema && !Array.isArray(schema.enum)) {
+    issues.push(
+      issue('invalid-schema', `${path}/enum`, 'enum must be an array')
+    );
+  }
   if ('type' in schema) {
     const types = Array.isArray(schema.type) ? schema.type : [schema.type];
     if (
@@ -358,7 +372,8 @@ function validateCallable(
   value: unknown,
   path: string,
   schemas: Record<string, unknown>,
-  issues: OpelRuntimeIssue[]
+  issues: OpelRuntimeIssue[],
+  active = new Set<unknown>()
 ) {
   if (!isRecord(value) || !Array.isArray(value.signatures)) {
     issues.push(
@@ -422,7 +437,8 @@ function validateCallable(
         `${parameterPath}/schema`,
         parameter.schema as Record<string, unknown>,
         schemas,
-        issues
+        issues,
+        active
       );
     });
     validateSchema(
@@ -430,7 +446,8 @@ function validateCallable(
       `${signaturePath}/returns`,
       signature.returns as Record<string, unknown>,
       schemas,
-      issues
+      issues,
+      active
     );
   });
 }

@@ -53,6 +53,7 @@ export const OPEL_NODE_NAMES = {
   LessThanOrEqual: 'LessThanOrEqual', // The `<=` comparison operator.
   Plus: 'Plus', // The `+` arithmetic operator.
   Minus: 'Minus', // The `-` arithmetic operator.
+  Not: 'Not', // The `!` unary operator.
   Multiply: 'Multiply', // The `*` arithmetic operator.
   Divide: 'Divide', // The `/` arithmetic operator.
 } as const;

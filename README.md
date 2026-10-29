@@ -123,6 +123,12 @@ readSetting('theme', 'dark')
 
 A method receiver can be a primitive type such as `string` or `integer`, or the exact name of a schema in `runtime.schemas`. Returning the same `$ref` preserves the named type for chained calls.
 
+For union receivers, the linter checks method availability and arguments separately for each alternative. A call supported by every alternative is accepted, one supported by only some warns, and one supported by none errors. Unknown receiver types remain permissive. Successful alternatives contribute their return schemas independently of metadata order. Named aliases take precedence over primitive registrations, and integer registrations take precedence over number registrations within each alternative.
+
+Calls on resolved values with unknown callability remain permissive; known non-callable values produce errors. Precise signatures are not inferred for functions returned by lambdas or selected by conditionals. Unary `-` on numeric literals and `!` on boolean literals retain their calculated results; other arithmetic uses type inference without constant folding.
+
+Non-array `enum` values and invalid callable definitions nested in schemas are configuration errors. They are reported through `onRuntimeIssues` during setup and disable the entire runtime snapshot.
+
 Schema validation allows recursive `$ref` properties but rejects paths deeper than 128 schema objects. Compatibility comparisons beyond 128 distinct recursive pairs are treated as unknown.
 
 ## Development

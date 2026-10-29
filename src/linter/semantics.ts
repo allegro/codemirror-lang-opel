@@ -21,7 +21,6 @@ import {
   schemaObject,
   schemaRootFor,
   createUnionSchema,
-  resolveSchemaReference,
   combineSchemaValues,
   resolveSchemaVariants,
   getSchemaTypes,
@@ -164,9 +163,49 @@ function analyzeExpression(
         ? analyzeExpression(node.firstChild, env, ctx)
         : { schema: true };
     case NODE.UnaryExpression:
-      return analyzeExpression(node.lastChild ?? node, env, ctx);
+      return analyzeUnary(node, env, ctx);
   }
   return analyzeOperators(node, env, ctx);
+}
+
+function analyzeUnary(
+  node: SyntaxNode,
+  env: Environment,
+  ctx: SemanticContext
+): Value {
+  const operand: Value = node.lastChild
+    ? analyzeExpression(node.lastChild, env, ctx)
+    : { schema: true };
+  const operator = node.firstChild?.name;
+  if (operator !== NODE.Not && operator !== NODE.Minus) {
+    return operand;
+  }
+  let literal: unknown;
+  let schema: OpelSchema = true;
+  if (operator === NODE.Not) {
+    schema = { type: 'boolean' };
+    if (typeof operand.literal === 'boolean') {
+      literal = !operand.literal;
+    }
+  } else if (typeof operand.literal === 'number') {
+    literal = -operand.literal;
+    schema = { type: valueType(literal) as OpelPrimitive };
+  } else {
+    const types = getSchemaTypes(
+      operand.schema,
+      schemaRoot(operand),
+      ctx.runtime
+    );
+    if (
+      types.length > 0 &&
+      types.every((type) => type === 'integer' || type === 'number')
+    ) {
+      schema = {
+        type: types.every((type) => type === 'integer') ? 'integer' : 'number',
+      };
+    }
+  }
+  return { schema, literal, error: operand.error };
 }
 
 // Both branches are checked, without condition-based narrowing.
@@ -178,11 +217,16 @@ function analyzeConditional(
   const branches = node.getChildren(NODE.Expression);
   if (branches.length >= 3) {
     analyzeExpression(branches[0], env, ctx);
+    const values = branches
+      .slice(1, 3)
+      .map((branch) => analyzeExpression(branch, env, ctx));
     return {
-      schema: createUnionSchema([
-        analyzeExpression(branches[1], env, ctx).schema,
-        analyzeExpression(branches[2], env, ctx).schema,
-      ]),
+      schema: values.some((value) => value.schema === true)
+        ? true
+        : createUnionSchema(
+            values.map((value) => value.schema),
+            values.map(schemaRoot)
+          ),
     };
   }
   return analyzeOperators(node, env, ctx);
@@ -208,15 +252,16 @@ function analyzeFunctionCall(
   const argNodes = node.getChild(NODE.Args)?.getChildren(NODE.Expression) ?? [];
   const args = argNodes.map((arg) => analyzeExpression(arg, env, ctx));
   if (!value.callable) {
-    if (!value.error) {
+    if (isKnownNonCallable(value, ctx)) {
       addDiagnostic(
         node,
         'error',
         `Symbol "${name}" is not callable.`,
         ctx.diagnostics
       );
+      return { schema: true, error: true };
     }
-    return { schema: true, error: true };
+    return { schema: true };
   }
 
   return analyzeCall(value.callable, args, node, ctx, argNodes);
@@ -276,22 +321,10 @@ function analyzePostfixExpression(
     if (method) {
       const nameNode = method.getChild(NODE.Identifier);
       const name = nameNode ? ctx.source.slice(nameNode.from, nameNode.to) : '';
-      const callable = resolveMethod(value, name, ctx);
       const argNodes =
         method.getChild(NODE.Args)?.getChildren(NODE.Expression) ?? [];
       const args = argNodes.map((arg) => analyzeExpression(arg, env, ctx));
-      if (!callable) {
-        addDiagnostic(
-          method,
-          'error',
-          `Invalid method "${name}" on type ${valueDescription(value, ctx)}. Available methods: ${formatNames(availableMethods(value, ctx))}.`,
-          ctx.diagnostics
-        );
-        value = { schema: true, error: true };
-      } else {
-        value = analyzeCall(callable, args, method, ctx, argNodes);
-        addDeprecation(ctx, method, callable.deprecated);
-      }
+      value = analyzeMethodCall(value, name, args, method, ctx, argNodes);
     } else if (field) {
       const dot = field.getChild(NODE.Identifier);
       if (dot) {
@@ -374,15 +407,17 @@ function analyzePostfixExpression(
         group.getChild(NODE.Args)?.getChildren(NODE.Expression) ?? [];
       const args = argNodes.map((arg) => analyzeExpression(arg, env, ctx));
       if (!value.callable) {
-        if (!value.error) {
+        if (isKnownNonCallable(value, ctx)) {
           addDiagnostic(
             group,
             'error',
             `This expression is not callable. Type '${valueDescription(value, ctx)}' has no call signatures.`,
             ctx.diagnostics
           );
+          value = { schema: true, error: true };
+        } else {
+          value = { schema: true };
         }
-        value = { schema: true, error: true };
       } else {
         value = analyzeCall(value.callable, args, group, ctx, argNodes);
       }
@@ -1013,6 +1048,25 @@ function callableValue(callable: OpelCallable): Value {
   return { schema: true, callable };
 }
 
+function isKnownNonCallable(value: Value, ctx: SemanticContext): boolean {
+  if (value.error) {
+    return false;
+  }
+  const variants = resolveSchemaVariants(
+    value.schema,
+    schemaRoot(value),
+    ctx.runtime
+  );
+  return (
+    variants.length > 0 &&
+    variants.every(
+      (variant) =>
+        !schemaObject(variant.schema)?.callable &&
+        getSchemaTypes(variant.schema, variant.root, ctx.runtime).length > 0
+    )
+  );
+}
+
 function objectConstraintMessage(
   value: Value,
   schema: OpelSchema,
@@ -1057,14 +1111,11 @@ function expectedArity(signatures: readonly OpelSignature[]): string {
   return `Expected one of ${uniqueRanges.map((range) => range.replace('-', ' to ')).join(', ')} arguments`;
 }
 
-// Filter by arity, then argument compatibility. Report mismatches only for complete calls.
-function analyzeCall(
+function matchCallSignatures(
   callable: OpelCallable,
   args: Value[],
-  node: SyntaxNode,
-  ctx: SemanticContext,
-  argNodes: SyntaxNode[] = []
-): Value {
+  ctx: SemanticContext
+) {
   const arityCompatible = callable.signatures.filter((signature) => {
     const required = signature.parameters.filter(
       (parameter) => !parameter.optional
@@ -1084,6 +1135,22 @@ function analyzeCall(
           ctx.runtime
         )
     )
+  );
+  return { arityCompatible, signatures };
+}
+
+// Filter by arity, then argument compatibility. Report mismatches only for complete calls.
+function analyzeCall(
+  callable: OpelCallable,
+  args: Value[],
+  node: SyntaxNode,
+  ctx: SemanticContext,
+  argNodes: SyntaxNode[] = []
+): Value {
+  const { arityCompatible, signatures } = matchCallSignatures(
+    callable,
+    args,
+    ctx
   );
   if (node.getChild(NODE.RParen) && !node.type.isError) {
     if (signatures.length === 0) {
@@ -1224,46 +1291,20 @@ function resolveIdentifier(
 function namedMethodReceivers(
   schema: OpelSchema,
   root: OpelSchema,
-  runtime: OpelRuntime,
-  seen = new Set<OpelSchema>()
+  runtime: OpelRuntime
 ): OpelMethodReceiver[] {
-  if (!isRecord(schema) || seen.has(schema)) {
-    return [];
-  }
-  seen.add(schema);
-  if (typeof schema.$ref === 'string') {
-    if (schema.$ref.startsWith('#/')) {
-      const resolved = resolveSchemaReference(schema, root, runtime);
-      return resolved.schema === schema
-        ? []
-        : namedMethodReceivers(resolved.schema, resolved.root, runtime, seen);
-    }
-    const target =
-      runtime.schemas &&
-      Object.prototype.hasOwnProperty.call(runtime.schemas, schema.$ref)
-        ? runtime.schemas[schema.$ref]
-        : undefined;
-    if (
-      target === undefined ||
-      PRIMITIVE_METHOD_RECEIVERS.includes(
-        schema.$ref as OpelPrimitiveMethodReceiver
+  return [
+    ...new Set(
+      resolveSchemaVariants(schema, root, runtime).flatMap(
+        (variant) => variant.references ?? []
       )
-    ) {
-      return [];
-    }
-    return [
-      schema.$ref,
-      ...namedMethodReceivers(target, target, runtime, seen),
-    ];
-  }
-  for (const key of ['oneOf', 'anyOf', 'allOf'] as const) {
-    if (Array.isArray(schema[key])) {
-      return schema[key].flatMap((child) =>
-        namedMethodReceivers(child, root, runtime, seen)
-      );
-    }
-  }
-  return [];
+    ),
+  ].filter(
+    (reference) =>
+      !PRIMITIVE_METHOD_RECEIVERS.includes(
+        reference as OpelPrimitiveMethodReceiver
+      )
+  );
 }
 
 function methodReceivers(
@@ -1284,25 +1325,156 @@ function methodReceivers(
   return [...new Set(ordered)];
 }
 
-// Named schemas and aliases precede primitives; select the first registration.
-function resolveMethod(
+// Undefined means unknown; null means no registration supports this alternative.
+function resolveMethods(
   receiver: Value,
   name: string,
   ctx: SemanticContext
-): OpelCallable | null {
-  for (const type of methodReceivers(receiver, ctx.runtime)) {
-    const methods = ctx.runtime.methods;
-    if (methods && Object.prototype.hasOwnProperty.call(methods, type)) {
-      const registrations = methods[type];
-      if (
-        registrations &&
-        Object.prototype.hasOwnProperty.call(registrations, name)
-      ) {
-        return registrations[name] ?? null;
-      }
+): (OpelCallable | null | undefined)[] {
+  return resolveSchemaVariants(
+    receiver.schema,
+    schemaRoot(receiver),
+    ctx.runtime
+  )
+    .flatMap((variant) => {
+      const named = (variant.references ?? []).filter(
+        (reference) =>
+          !PRIMITIVE_METHOD_RECEIVERS.includes(
+            reference as OpelPrimitiveMethodReceiver
+          )
+      );
+      const types = getSchemaTypes(variant.schema, variant.root, ctx.runtime);
+      return (types.length > 0 ? types : ['unknown'])
+        .filter((type) => type !== 'never')
+        .map((type) => {
+          const receivers = [
+            ...new Set([
+              ...named,
+              ...(type === 'integer'
+                ? ['integer', 'number']
+                : PRIMITIVE_METHOD_RECEIVERS.includes(
+                      type as OpelPrimitiveMethodReceiver
+                    )
+                  ? [type]
+                  : []),
+            ]),
+          ];
+          let callable: OpelCallable | null | undefined =
+            variant.schema === true ||
+            (type === 'unknown' && named.length === 0)
+              ? undefined
+              : null;
+          for (const receiver of receivers) {
+            const registrations = Object.prototype.hasOwnProperty.call(
+              ctx.runtime.methods ?? {},
+              receiver
+            )
+              ? ctx.runtime.methods?.[receiver]
+              : undefined;
+            if (
+              registrations &&
+              Object.prototype.hasOwnProperty.call(registrations, name)
+            ) {
+              callable = registrations[name];
+              break;
+            }
+          }
+          return { key: JSON.stringify([...receivers, type]), callable };
+        });
+    })
+    .sort((left, right) => left.key.localeCompare(right.key))
+    .map(({ callable }) => callable);
+}
+
+function analyzeMethodCall(
+  receiver: Value,
+  name: string,
+  args: Value[],
+  node: SyntaxNode,
+  ctx: SemanticContext,
+  argNodes: SyntaxNode[]
+): Value {
+  if (receiver.error) {
+    return { schema: true };
+  }
+  const alternatives = resolveMethods(receiver, name, ctx);
+  if (alternatives.length === 0) {
+    return { schema: true };
+  }
+  const complete = node.getChild(NODE.RParen) && !node.type.isError;
+  // Receiver alternatives dispatch independently; they are not ordinary overloads.
+  const supported = alternatives.filter(
+    (callable) =>
+      callable === undefined ||
+      (callable !== null &&
+        (!complete ||
+          matchCallSignatures(callable, args, ctx).signatures.length > 0))
+  );
+  if (supported.length === 0) {
+    const callables = alternatives.flatMap((callable) =>
+      callable ? [callable] : []
+    );
+    if (callables.length > 0) {
+      return analyzeCall(
+        { signatures: callables.flatMap((callable) => callable.signatures) },
+        args,
+        node,
+        ctx,
+        argNodes
+      );
+    }
+    const description =
+      alternatives.length === 1
+        ? `type ${valueDescription(receiver, ctx)}`
+        : 'every receiver variant';
+    addDiagnostic(
+      node,
+      'error',
+      `Invalid method "${name}" on ${description}. Available methods: ${formatNames(availableMethods(receiver, ctx))}.`,
+      ctx.diagnostics
+    );
+    return { schema: true, error: true };
+  }
+  if (supported.length < alternatives.length) {
+    addDiagnostic(
+      node,
+      'warning',
+      `Method "${name}" can only be called on some receiver variants with these arguments.`,
+      ctx.diagnostics
+    );
+  }
+  const callables = [
+    ...new Set(supported.flatMap((callable) => (callable ? [callable] : []))),
+  ];
+  const methodContext = { ...ctx, diagnostics: [] as Diagnostic[] };
+  const results = callables.map((callable) => {
+    const result = analyzeCall(callable, args, node, methodContext, argNodes);
+    addDeprecation(methodContext, node, callable.deprecated);
+    return result;
+  });
+  for (const diagnostic of methodContext.diagnostics) {
+    if (
+      !ctx.diagnostics.some(
+        (existing) =>
+          existing.from === diagnostic.from &&
+          existing.to === diagnostic.to &&
+          existing.severity === diagnostic.severity &&
+          existing.message === diagnostic.message
+      )
+    ) {
+      ctx.diagnostics.push(diagnostic);
     }
   }
-  return null;
+  return {
+    schema:
+      supported.includes(undefined) ||
+      results.some((result) => result.schema === true)
+        ? true
+        : createUnionSchema(
+            results.map((result) => result.schema),
+            results.map(schemaRoot)
+          ),
+  };
 }
 
 // Distinguish explicit property support from permissive inference fallbacks.

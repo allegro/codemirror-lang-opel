@@ -79,20 +79,26 @@ function decodePointerSegment(value: string): string {
 }
 
 // Local references use the originating document; external keys start a new root.
-// Repeated reference strings stop this resolution chain.
+// A reference repeats only within the same owning document.
 export function resolveSchemaReference(
   schema: OpelSchema,
   root: OpelSchema,
   runtime: OpelRuntime,
-  seen = new Set<string>()
+  seen = new Map<OpelSchema, Set<string>>()
 ): SchemaResolution {
   const effectiveRoot = schemaRootFor(schema, root);
   const object = schemaObject(schema);
-  if (!object || typeof object.$ref !== 'string' || seen.has(object.$ref)) {
+  if (
+    !object ||
+    typeof object.$ref !== 'string' ||
+    seen.get(effectiveRoot)?.has(object.$ref)
+  ) {
     return { schema, root: effectiveRoot };
   }
   const ref = object.$ref;
-  seen.add(ref);
+  const references = seen.get(effectiveRoot) ?? new Set<string>();
+  references.add(ref);
+  seen.set(effectiveRoot, references);
   if (ref.startsWith('#/')) {
     const [section, name] = ref.slice(2).split('/').map(decodePointerSegment);
     const rootObject = schemaObject(effectiveRoot);

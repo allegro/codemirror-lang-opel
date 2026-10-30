@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { OpelRuntime } from '../../src';
+import type { OpelOptions, OpelRuntime, OpelRuntimeIssue } from '../../src';
 import { lint } from '../support/test-utils';
 
 const runtime: OpelRuntime = {
@@ -163,6 +163,69 @@ describe('named schema method receivers', () => {
       )
     ).toBe(true);
   });
+
+  it.each(['$defs', 'definitions'])(
+    'resolves repeated local %s paths in different schema documents',
+    (definitions) => {
+      const runtime: OpelRuntime = {
+        schemas: {
+          A: {
+            $ref: `#/${definitions}/Value`,
+            [definitions]: { Value: { $ref: 'B' } },
+          },
+          B: {
+            $ref: `#/${definitions}/Value`,
+            [definitions]: { Value: { $ref: 'C' } },
+          },
+          C: {
+            type: 'object',
+            properties: { label: { type: 'string' } },
+          },
+        },
+        globals: { value: { $ref: 'A' } },
+        methods: {
+          C: {
+            ok: {
+              signatures: [{ parameters: [], returns: { type: 'integer' } }],
+            },
+          },
+        },
+        functions: {
+          acceptInteger: {
+            signatures: [
+              { parameters: [{ schema: { type: 'integer' } }], returns: true },
+            ],
+          },
+          acceptString: {
+            signatures: [
+              { parameters: [{ schema: { type: 'string' } }], returns: true },
+            ],
+          },
+        },
+      };
+      const issues: OpelRuntimeIssue[] = [];
+      const options: OpelOptions = {
+        runtime,
+        onRuntimeIssues: (next) => issues.push(...next),
+      };
+
+      expect(lint('value.ok()', options)).toEqual([]);
+      expect(lint('acceptInteger(value.ok())', options)).toEqual([]);
+      expect(lint('acceptString(value.ok())', options)).toContainEqual(
+        expect.objectContaining({
+          severity: 'error',
+          message: expect.stringContaining('Type mismatch'),
+        })
+      );
+      expect(lint('acceptInteger(value.label)', options)).toContainEqual(
+        expect.objectContaining({
+          severity: 'error',
+          message: expect.stringContaining('Type mismatch'),
+        })
+      );
+      expect(issues).toEqual([]);
+    }
+  );
 
   it('keeps primitive receivers and integer-to-number fallback working', () => {
     expect(lint("'x'.upper()", { runtime })).toHaveLength(0);

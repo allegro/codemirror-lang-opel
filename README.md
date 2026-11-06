@@ -31,7 +31,9 @@ const state = EditorState.create({
     enableLinter: true,
     includeLintGutter: true,
     warnOnLambdaDefinitions: true,
-    runtimeGlobals: ['ctx', 'env'],
+    runtime: {
+      globals: { ctx: true, env: true },
+    },
   }),
 });
 
@@ -46,13 +48,94 @@ Available options:
 - `enableLinter` (default: `true`)
 - `includeLintGutter` (default: `true`)
 - `warnOnLambdaDefinitions` (default: `true`) — emits a linter warning for each lambda definition.
-- `runtimeGlobals` (default: `[]`) — variable names treated as globally available at runtime, so linter does not report them as undeclared.
+- `runtime` (default: absent) — validated runtime globals, functions, methods, and schemas used by linting.
+
+`runtimeGlobals` was removed. Migrate each name to `runtime.globals`, for example `{ runtime: { globals: { ctx: true } } }`.
+
+### Runtime metadata
+
+Runtime functions and methods are declared with callable signatures. Use `schema: true` for an unconstrained value and `optional: true` for an optional trailing parameter:
+
+```ts
+import { opelExtensions } from '@allegro/codemirror-lang-opel';
+import type { OpelRuntime } from '@allegro/codemirror-lang-opel';
+
+const runtime = {
+  functions: {
+    readSetting: {
+      signatures: [
+        {
+          parameters: [
+            { name: 'name', schema: { type: 'string' } },
+            { name: 'fallback', schema: true, optional: true },
+          ],
+          returns: { type: 'string' },
+        },
+      ],
+    },
+    now: {
+      signatures: [{ parameters: [], returns: { $ref: 'CalendarInstant' } }],
+    },
+  },
+  schemas: {
+    CalendarInstant: {},
+  },
+  methods: {
+    string: {
+      length: {
+        signatures: [{ parameters: [], returns: { type: 'integer' } }],
+      },
+    },
+    CalendarInstant: {
+      plusDays: {
+        signatures: [
+          {
+            parameters: [{ name: 'days', schema: { type: 'integer' } }],
+            returns: { $ref: 'CalendarInstant' },
+          },
+        ],
+      },
+      formatIso: {
+        signatures: [
+          {
+            parameters: [{ name: 'pattern', schema: { type: 'string' } }],
+            returns: { type: 'string' },
+          },
+        ],
+      },
+    },
+  },
+} satisfies OpelRuntime;
+
+const extensions = opelExtensions({
+  runtime,
+  onRuntimeIssues: (issues) => console.error(issues),
+});
+```
+
+The named receiver above makes these expressions type-check:
+
+```text
+now().plusDays(1).formatIso('yyyy-MM-dd')
+'hello'.length()
+readSetting('theme', 'dark')
+```
+
+A method receiver can be a primitive type such as `string` or `integer`, or the exact name of a schema in `runtime.schemas`. Returning the same `$ref` preserves the named type for chained calls.
+
+For union receivers, the linter checks method availability and arguments separately for each alternative. A call supported by every alternative is accepted, one supported by only some warns, and one supported by none errors. Unknown receiver types remain permissive. Successful alternatives contribute their return schemas independently of metadata order. Named aliases take precedence over primitive registrations, and integer registrations take precedence over number registrations within each alternative.
+
+Calls on resolved values with unknown callability remain permissive; known non-callable values produce errors. Precise signatures are not inferred for functions returned by lambdas or selected by conditionals. Unary `-` on numeric literals and `!` on boolean literals retain their calculated results; other arithmetic uses type inference without constant folding.
+
+Non-array `enum` values and invalid callable definitions nested in schemas are configuration errors. They are reported through `onRuntimeIssues` during setup and disable the entire runtime snapshot.
+
+Schema validation allows recursive `$ref` properties but rejects paths deeper than 128 schema objects. Compatibility comparisons beyond 128 distinct recursive pairs are treated as unknown.
 
 ## Development
 
 ### Prerequisites
 
-Node ≥ 22 and npm ≥ 10.
+Node ≥ 24.19.0 and npm ≥ 11.17.0 for development. The published package supports Node ≥ 24.19.0.
 
 ### Start dev mode
 

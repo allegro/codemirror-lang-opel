@@ -54,6 +54,25 @@ function schemaRoot(value: Value): OpelSchema {
   return value.root ?? value.schema;
 }
 
+function hasOnlyTypes(
+  value: Value,
+  allowed: string[],
+  ctx: SemanticContext
+): boolean {
+  const variants = resolveSchemaVariants(
+    value.schema,
+    schemaRoot(value),
+    ctx.runtime
+  );
+  return (
+    variants.length > 0 &&
+    variants.every(({ schema, root }) => {
+      const types = getSchemaTypes(schema, root, ctx.runtime);
+      return types.length > 0 && types.every((type) => allowed.includes(type));
+    })
+  );
+}
+
 type SemanticContext = {
   source: string;
   runtime: OpelRuntime;
@@ -345,7 +364,9 @@ function analyzePostfixExpression(
           receiverRoot,
           ctx.runtime
         );
-        if (receiverTypes.includes('array')) {
+        if (value.error) {
+          value = { schema: true, error: true };
+        } else if (receiverTypes.includes('array')) {
           if (
             key.literal !== undefined &&
             (!Number.isInteger(key.literal) || (key.literal as number) < 0)
@@ -356,6 +377,7 @@ function analyzePostfixExpression(
               `Invalid list index: list index must be an integer; received '${valueDescription(key, ctx)}'.`,
               ctx.diagnostics
             );
+            value = { schema: true, error: true };
           } else {
             const itemValues = resolveSchemaVariants(
               value.schema,
@@ -383,6 +405,17 @@ function analyzePostfixExpression(
               root: itemValues[0]?.root ?? receiverRoot,
             };
           }
+        } else if (
+          hasOnlyTypes(value, ['object'], ctx) &&
+          hasOnlyTypes(key, ['integer', 'number'], ctx)
+        ) {
+          addDiagnostic(
+            field,
+            'error',
+            'Numeric indices can only be used on lists; use a string key to access an object property.',
+            ctx.diagnostics
+          );
+          value = { schema: true, error: true };
         } else if (
           key.literal !== undefined &&
           typeof key.literal === 'string'
@@ -416,7 +449,7 @@ function analyzePostfixExpression(
           );
           value = { schema: true, error: true };
         } else {
-          value = { schema: true };
+          value = { schema: true, ...(value.error ? { error: true } : {}) };
         }
       } else {
         value = analyzeCall(value.callable, args, group, ctx, argNodes);
@@ -1395,7 +1428,7 @@ function analyzeMethodCall(
   argNodes: SyntaxNode[]
 ): Value {
   if (receiver.error) {
-    return { schema: true };
+    return { schema: true, error: true };
   }
   const alternatives = resolveMethods(receiver, name, ctx);
   if (alternatives.length === 0) {
@@ -1484,8 +1517,20 @@ function resolvePropertyAccess(
   node: SyntaxNode,
   ctx: SemanticContext
 ): Value {
-  if (receiver.error || receiver.schema === true) {
+  if (receiver.error) {
+    return { schema: true, error: true };
+  }
+  if (receiver.schema === true) {
     return { schema: true };
+  }
+  if (hasOnlyTypes(receiver, ['array'], ctx)) {
+    addDiagnostic(
+      node,
+      'error',
+      `Property "${name}" is not defined on a list. Select a list item first, for example using [index].`,
+      ctx.diagnostics
+    );
+    return { schema: true, error: true };
   }
   const supports: Value[] = [];
   let hasExplicitSupport = false;

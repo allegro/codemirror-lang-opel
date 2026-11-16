@@ -109,6 +109,10 @@ export function opelLinter(options: OpelOptions = {}) {
     const diagnostics: Diagnostic[] = [];
     const doc = view.state.doc;
     const source = doc.toString();
+    if (source.trim() === '') {
+      return diagnostics;
+    }
+
     const delimiterAnalysis = analyzeDelimiters(source);
     const usedBeforeDeclarationPositions = new Set<number>();
     const usedNames = new Set<string>();

@@ -59,6 +59,9 @@ function isSchemaCompatible(
     sourceRoot,
     runtime
   );
+  if (sourceVariants.some((variant) => variant.schema === true)) {
+    return true;
+  }
   const targetVariants = resolveSchemaVariants(
     targetSchema,
     targetRoot,

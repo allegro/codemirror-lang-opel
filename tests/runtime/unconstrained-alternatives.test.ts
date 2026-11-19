@@ -236,11 +236,17 @@ describe('unconstrained inference alternatives', () => {
   });
 
   it('keeps property access on an impossible receiver impossible', () => {
-    const diagnostics = lint('(impossible.missing)()', {
-      runtime: { globals: { impossible: false } },
-    });
+    const options = { runtime: { globals: { impossible: false } } };
+    const diagnostics = [
+      ...lint('(impossible.missing)()', options),
+      ...lint('(impossible[0])()', options),
+    ];
 
     expect(diagnostics).toEqual([
+      expect.objectContaining({
+        severity: 'error',
+        message: expect.stringContaining("Type 'never' has no call signatures"),
+      }),
       expect.objectContaining({
         severity: 'error',
         message: expect.stringContaining("Type 'never' has no call signatures"),

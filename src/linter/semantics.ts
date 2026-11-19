@@ -463,6 +463,11 @@ function analyzePostfixExpression(
             `Dynamic property access is discouraged on closed object type ${schemaDescription(value.schema, schemaRootForValue(value), ctx.runtime)}; use a known property name.`,
             ctx.diagnostics
           );
+        } else if (
+          receiverTypes.length > 0 &&
+          receiverTypes.every((type) => type === 'never')
+        ) {
+          value = { schema: false, root: receiverRoot };
         } else {
           value = { schema: true };
         }

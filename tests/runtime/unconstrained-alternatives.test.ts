@@ -213,4 +213,38 @@ describe('unconstrained inference alternatives', () => {
       )
     ).toBe(true);
   });
+
+  it('keeps forbidden array items out of inferred unions', () => {
+    const runtime: OpelRuntime = {
+      ...geometryRuntime,
+      globals: {
+        ...geometryRuntime.globals,
+        items: {
+          oneOf: [
+            { type: 'array', items: false },
+            { type: 'array', items: { type: 'string' } },
+          ],
+        },
+      },
+    };
+
+    expect(
+      lint('acceptInteger(items[0])', { runtime }).some((diagnostic) =>
+        diagnostic.message.includes('Type mismatch')
+      )
+    ).toBe(true);
+  });
+
+  it('keeps property access on an impossible receiver impossible', () => {
+    const diagnostics = lint('(impossible.missing)()', {
+      runtime: { globals: { impossible: false } },
+    });
+
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        severity: 'error',
+        message: expect.stringContaining("Type 'never' has no call signatures"),
+      }),
+    ]);
+  });
 });

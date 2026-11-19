@@ -430,7 +430,7 @@ function analyzePostfixExpression(
               const items = schemaObject(resolution.schema)?.items as
                 | OpelSchema
                 | undefined;
-              return items
+              return items !== undefined
                 ? [
                     {
                       schema: items,
@@ -1579,11 +1579,18 @@ function resolvePropertyAccess(
   let hasExplicitSupport = false;
   let unsupported = 0;
   const receiverRoot = schemaRootForValue(receiver);
-  for (const resolution of resolveSchemaVariants(
+  const variants = resolveSchemaVariants(
     receiver.schema,
     receiverRoot,
     ctx.runtime
-  )) {
+  );
+  if (
+    variants.length > 0 &&
+    variants.every((resolution) => resolution.schema === false)
+  ) {
+    return { schema: false, root: receiverRoot };
+  }
+  for (const resolution of variants) {
     const variant = resolution.schema;
     if (variant === true) {
       return { schema: true };

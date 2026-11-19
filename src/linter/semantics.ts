@@ -71,6 +71,15 @@ type SemanticContext = {
   suppressUnknownIdentifierAt: ReadonlySet<number>;
 };
 
+function isImpossibleValue(value: Value, ctx: SemanticContext): boolean {
+  const types = getSchemaTypes(
+    value.schema,
+    schemaRootForValue(value),
+    ctx.runtime
+  );
+  return types.length > 0 && types.every((type) => type === 'never');
+}
+
 type SemanticAnalysisOptions = {
   suppressUnknownIdentifierAt?: ReadonlySet<number>;
 };
@@ -463,10 +472,7 @@ function analyzePostfixExpression(
             `Dynamic property access is discouraged on closed object type ${schemaDescription(value.schema, schemaRootForValue(value), ctx.runtime)}; use a known property name.`,
             ctx.diagnostics
           );
-        } else if (
-          receiverTypes.length > 0 &&
-          receiverTypes.every((type) => type === 'never')
-        ) {
+        } else if (isImpossibleValue(value, ctx)) {
           value = { schema: false, root: receiverRoot };
         } else {
           value = { schema: true };
@@ -631,9 +637,13 @@ function analyzeMap(
         : undefined;
     if (typeof keyValue === 'string') {
       const value = analyzeExpression(valueNode, env, ctx);
-      properties[keyValue] = value.callable
+      const propertySchema = value.callable
         ? { callable: value.callable }
         : value.schema;
+      properties[keyValue] = createUnionSchema(
+        [propertySchema],
+        [schemaRootForValue(value)]
+      );
       if (value.literal !== undefined) {
         literal[keyValue] = value.literal;
       }
@@ -1486,6 +1496,9 @@ function analyzeMethodCall(
   if (receiver.error) {
     return { schema: true };
   }
+  if (isImpossibleValue(receiver, ctx)) {
+    return { schema: false, root: schemaRootForValue(receiver) };
+  }
   const alternatives = resolveMethods(receiver, name, ctx);
   if (alternatives.length === 0) {
     return { schema: true };
@@ -1580,6 +1593,9 @@ function resolvePropertyAccess(
   if (receiver.error || receiver.schema === true) {
     return { schema: true };
   }
+  if (isImpossibleValue(receiver, ctx)) {
+    return { schema: false, root: schemaRootForValue(receiver) };
+  }
   const supports: Value[] = [];
   let hasExplicitSupport = false;
   let unsupported = 0;
@@ -1589,12 +1605,6 @@ function resolvePropertyAccess(
     receiverRoot,
     ctx.runtime
   );
-  if (
-    variants.length > 0 &&
-    variants.every((resolution) => resolution.schema === false)
-  ) {
-    return { schema: false, root: receiverRoot };
-  }
   for (const resolution of variants) {
     const variant = resolution.schema;
     if (variant === true) {

@@ -196,6 +196,74 @@ describe('unconstrained inference alternatives', () => {
     }
   );
 
+  it('keeps local reference roots for values inside object literals', () => {
+    // `make()` returns a local ref whose definition lives on the return schema.
+    // After wrapping it, `.child.id` should still resolve to string, so passing it
+    // to `acceptInteger` must report a type mismatch.
+    const returnSchema: OpelSchema = {
+      $ref: '#/$defs/Child',
+      $defs: {
+        Child: {
+          type: 'object',
+          properties: { id: { type: 'string' } },
+          required: ['id'],
+          additionalProperties: false,
+        },
+      },
+    };
+    const runtime: OpelRuntime = {
+      functions: {
+        make: { signatures: [{ parameters: [], returns: returnSchema }] },
+        acceptInteger: {
+          signatures: [
+            { parameters: [{ schema: { type: 'integer' } }], returns: true },
+          ],
+        },
+      },
+    };
+
+    expect(
+      lint('val wrapped = { child: make() }; acceptInteger(wrapped.child.id)', {
+        runtime,
+      })
+    ).toContainEqual(
+      expect.objectContaining({
+        severity: 'error',
+        message: expect.stringContaining('Type mismatch'),
+      })
+    );
+  });
+
+  it('keeps impossible method results out of conditional joins', () => {
+    const runtime: OpelRuntime = {
+      globals: {
+        selector: { type: 'boolean' },
+        // An arbitrary global name whose false schema admits no values.
+        neverValue: false,
+      },
+      functions: {
+        acceptInteger: {
+          signatures: [
+            { parameters: [{ schema: { type: 'integer' } }], returns: true },
+          ],
+        },
+      },
+    };
+
+    // The impossible call contributes never, leaving a string result that
+    // `acceptInteger` must reject.
+    expect(
+      lint('acceptInteger(if (selector) neverValue.missing() else "text")', {
+        runtime,
+      })
+    ).toContainEqual(
+      expect.objectContaining({
+        severity: 'error',
+        message: expect.stringContaining('Type mismatch'),
+      })
+    );
+  });
+
   it('discards impossible alternatives when inferring array items', () => {
     const runtime: OpelRuntime = {
       ...geometryRuntime,

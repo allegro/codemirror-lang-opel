@@ -36,8 +36,7 @@ export function schemaRootFor(
   return isRecord(schema) ? (SCHEMA_ROOTS.get(schema) ?? fallback) : fallback;
 }
 
-// Flatten oneOf branches; standalone true (unknown) inputs add no alternatives.
-// Each retained branch keeps its own document root.
+// Flatten oneOf branches while retaining unknown alternatives and branch roots.
 export function createUnionSchema(
   schemas: OpelSchema[],
   roots: OpelSchema[] = []
@@ -50,19 +49,22 @@ export function createUnionSchema(
     const branchRoots = object ? SCHEMA_BRANCH_ROOTS.get(object) : undefined;
     if (object && Array.isArray(object.oneOf)) {
       for (const [branchIndex, branch] of object.oneOf.entries()) {
+        if (branch === false) {
+          continue;
+        }
         flattened.push(branch as OpelSchema);
         flattenedRoots.push(
           branchRoots?.[branchIndex] ??
             schemaRootFor(branch as OpelSchema, fallbackRoot)
         );
       }
-    } else if (schema !== true) {
+    } else if (schema !== false) {
       flattened.push(schema);
       flattenedRoots.push(schemaRootFor(schema, fallbackRoot));
     }
   }
   if (flattened.length === 0) {
-    return true;
+    return schemas.length === 0 ? true : false;
   }
   if (flattened.length === 1) {
     rememberSchemaRoot(flattened[0], flattenedRoots[0]);
@@ -475,29 +477,33 @@ export function resolveSchemaVariants(
   nextSeen.add(resolved.schema);
   if (Array.isArray(object.oneOf)) {
     const branchRoots = SCHEMA_BRANCH_ROOTS.get(object);
+    const alternatives = object.oneOf.flatMap((child, index) =>
+      resolveSchemaVariants(
+        child as OpelSchema,
+        branchRoots?.[index] ?? resolved.root,
+        runtime,
+        nextSeen
+      )
+    );
+    const possible = alternatives.filter((variant) => variant.schema !== false);
     return withSchemaReferences(
-      object.oneOf.flatMap((child, index) =>
-        resolveSchemaVariants(
-          child as OpelSchema,
-          branchRoots?.[index] ?? resolved.root,
-          runtime,
-          nextSeen
-        )
-      ),
+      possible.length > 0 ? possible : [{ schema: false, root: resolved.root }],
       resolved.references
     );
   }
   if (Array.isArray(object.anyOf)) {
     const branchRoots = SCHEMA_BRANCH_ROOTS.get(object);
+    const alternatives = object.anyOf.flatMap((child, index) =>
+      resolveSchemaVariants(
+        child as OpelSchema,
+        branchRoots?.[index] ?? resolved.root,
+        runtime,
+        nextSeen
+      )
+    );
+    const possible = alternatives.filter((variant) => variant.schema !== false);
     return withSchemaReferences(
-      object.anyOf.flatMap((child, index) =>
-        resolveSchemaVariants(
-          child as OpelSchema,
-          branchRoots?.[index] ?? resolved.root,
-          runtime,
-          nextSeen
-        )
-      ),
+      possible.length > 0 ? possible : [{ schema: false, root: resolved.root }],
       resolved.references
     );
   }
@@ -552,7 +558,11 @@ export function getSchemaTypes(
     return ['never'];
   }
   const types = new Set<string>();
-  for (const resolution of resolveSchemaVariants(schema, root, runtime)) {
+  const variants = resolveSchemaVariants(schema, root, runtime);
+  if (variants.some((resolution) => resolution.schema === true)) {
+    return [];
+  }
+  for (const resolution of variants) {
     const variant = resolution.schema;
     if (variant === true) {
       continue;

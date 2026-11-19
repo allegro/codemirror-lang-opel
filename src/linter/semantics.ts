@@ -47,10 +47,19 @@ const EXPRESSION_NODES = new Set([
 // Error marks an already-reported failure for dependent diagnostic suppression.
 type Value = SchemaValue & { callable?: OpelCallable; error?: boolean };
 
-type Environment = Map<string, Value>;
+type Binding = {
+  name: string;
+  from: number;
+  to: number;
+  kind: 'val' | 'lambda parameter';
+  value: Value;
+  used: boolean;
+};
+
+type Environment = Map<string, Binding>;
 
 // Derived values resolve local references against the document that introduced them.
-function schemaRoot(value: Value): OpelSchema {
+function schemaRootForValue(value: Value): OpelSchema {
   return value.root ?? value.schema;
 }
 
@@ -61,6 +70,15 @@ type SemanticContext = {
   deprecated: Set<string>;
   suppressUnknownIdentifierAt: ReadonlySet<number>;
 };
+
+function isImpossibleValue(value: Value, ctx: SemanticContext): boolean {
+  const types = getSchemaTypes(
+    value.schema,
+    schemaRootForValue(value),
+    ctx.runtime
+  );
+  return types.length > 0 && types.every((type) => type === 'never');
+}
 
 type SemanticAnalysisOptions = {
   suppressUnknownIdentifierAt?: ReadonlySet<number>;
@@ -93,6 +111,7 @@ function analyzeScopeBody(
   env: Environment,
   ctx: SemanticContext
 ): Value {
+  const bindings: Binding[] = [];
   const declarations = body.getChild(NODE.Declarations);
   if (declarations) {
     for (const declaration of declarations.getChildren(NODE.Declaration)) {
@@ -104,14 +123,60 @@ function analyzeScopeBody(
         ? analyzeExpression(expression, env, ctx)
         : { schema: true };
       if (nameNode) {
-        env.set(ctx.source.slice(nameNode.from, nameNode.to), value);
+        const name = ctx.source.slice(nameNode.from, nameNode.to);
+        const isRuntimeGlobal = Object.prototype.hasOwnProperty.call(
+          ctx.runtime.globals ?? {},
+          name
+        );
+        const isRuntimeFunction = Object.prototype.hasOwnProperty.call(
+          ctx.runtime.functions ?? {},
+          name
+        );
+        if (!env.has(name) && (isRuntimeGlobal || isRuntimeFunction)) {
+          addDiagnostic(
+            nameNode,
+            'error',
+            isRuntimeFunction
+              ? `Cannot redeclare runtime global function '${name}'`
+              : `Cannot redeclare runtime global '${name}'`,
+            ctx.diagnostics
+          );
+        }
+        const binding: Binding = {
+          name,
+          from: nameNode.from,
+          to: nameNode.to,
+          kind: 'val',
+          value,
+          used: false,
+        };
+        bindings.push(binding);
+        env.set(name, binding);
       }
     }
   }
   const expression = body.getChild(NODE.Expression);
-  return expression
+  const result = expression
     ? analyzeExpression(expression, env, ctx)
     : { schema: true };
+  addUnusedBindingDiagnostics(bindings, ctx);
+  return result;
+}
+
+function addUnusedBindingDiagnostics(
+  bindings: Binding[],
+  ctx: SemanticContext
+): void {
+  for (const binding of bindings) {
+    if (!binding.used) {
+      ctx.diagnostics.push({
+        from: binding.from,
+        to: binding.to,
+        severity: 'warning',
+        message: `Variable "${binding.name}" is declared but never used.`,
+      });
+    }
+  }
 }
 
 function analyzeExpression(
@@ -193,7 +258,7 @@ function analyzeUnary(
   } else {
     const types = getSchemaTypes(
       operand.schema,
-      schemaRoot(operand),
+      schemaRootForValue(operand),
       ctx.runtime
     );
     if (
@@ -221,12 +286,10 @@ function analyzeConditional(
       .slice(1, 3)
       .map((branch) => analyzeExpression(branch, env, ctx));
     return {
-      schema: values.some((value) => value.schema === true)
-        ? true
-        : createUnionSchema(
-            values.map((value) => value.schema),
-            values.map(schemaRoot)
-          ),
+      schema: createUnionSchema(
+        values.map((value) => value.schema),
+        values.map(schemaRootForValue)
+      ),
     };
   }
   return analyzeOperators(node, env, ctx);
@@ -287,12 +350,23 @@ function analyzeLambda(
   );
   const body = node.getChild(NODE.FunctionBody);
   const localEnvironment = new Map(env);
-  for (const name of names) {
-    localEnvironment.set(name, { schema: true });
+  const bindings = paramNodes.map(
+    (param, index): Binding => ({
+      name: names[index],
+      from: param.from,
+      to: param.to,
+      kind: 'lambda parameter',
+      value: { schema: true },
+      used: false,
+    })
+  );
+  for (const binding of bindings) {
+    localEnvironment.set(binding.name, binding);
   }
   const returnValue = body?.firstChild
     ? analyzeExpression(body.firstChild, localEnvironment, ctx)
     : { schema: true };
+  addUnusedBindingDiagnostics(bindings, ctx);
   return callableValue({
     signatures: [
       {
@@ -339,7 +413,7 @@ function analyzePostfixExpression(
         const key = expression
           ? analyzeExpression(expression, env, ctx)
           : { schema: true };
-        const receiverRoot = schemaRoot(value);
+        const receiverRoot = schemaRootForValue(value);
         const receiverTypes = getSchemaTypes(
           value.schema,
           receiverRoot,
@@ -365,14 +439,14 @@ function analyzePostfixExpression(
               const items = schemaObject(resolution.schema)?.items as
                 | OpelSchema
                 | undefined;
-              return items === undefined
-                ? []
-                : [
+              return items !== undefined
+                ? [
                     {
                       schema: items,
                       root: schemaRootFor(items, resolution.root),
                     },
-                  ];
+                  ]
+                : [{ schema: true as const, root: resolution.root }];
             });
             const itemSchema = createUnionSchema(
               itemValues.map((item) => item.schema),
@@ -395,9 +469,11 @@ function analyzePostfixExpression(
           addDiagnostic(
             field,
             'warning',
-            `Dynamic property access is discouraged on closed object type ${schemaDescription(value.schema, schemaRoot(value), ctx.runtime)}; use a known property name.`,
+            `Dynamic property access is discouraged on closed object type ${schemaDescription(value.schema, schemaRootForValue(value), ctx.runtime)}; use a known property name.`,
             ctx.diagnostics
           );
+        } else if (isImpossibleValue(value, ctx)) {
+          value = { schema: false, root: receiverRoot };
         } else {
           value = { schema: true };
         }
@@ -523,7 +599,10 @@ function analyzeList(
   return {
     schema: {
       type: 'array',
-      items: createUnionSchema(values.map((value) => value.schema)),
+      items: createUnionSchema(
+        values.map((value) => value.schema),
+        values.map(schemaRootForValue)
+      ),
     },
     literal: values.every((value) => value.literal !== undefined)
       ? values.map((value) => value.literal)
@@ -558,9 +637,13 @@ function analyzeMap(
         : undefined;
     if (typeof keyValue === 'string') {
       const value = analyzeExpression(valueNode, env, ctx);
-      properties[keyValue] = value.callable
+      const propertySchema = value.callable
         ? { callable: value.callable }
         : value.schema;
+      properties[keyValue] = createUnionSchema(
+        [propertySchema],
+        [schemaRootForValue(value)]
+      );
       if (value.literal !== undefined) {
         literal[keyValue] = value.literal;
       }
@@ -619,9 +702,11 @@ function analyzeOperators(
       node.name === NODE.AdditiveExpression &&
       node.getChildren(NODE.Plus).length > 0 &&
       values.every((value) =>
-        getSchemaTypes(value.schema, schemaRoot(value), ctx.runtime).includes(
-          'string'
-        )
+        getSchemaTypes(
+          value.schema,
+          schemaRootForValue(value),
+          ctx.runtime
+        ).includes('string')
       )
     ) {
       return { schema: { type: 'string' } };
@@ -665,12 +750,12 @@ function validateArithmeticOperands(
 
     const leftTypes = getSchemaTypes(
       left.schema,
-      schemaRoot(left),
+      schemaRootForValue(left),
       ctx.runtime
     );
     const rightTypes = getSchemaTypes(
       right.schema,
-      schemaRoot(right),
+      schemaRootForValue(right),
       ctx.runtime
     );
     const knownLeftTypes = leftTypes.filter((type) => type !== 'never');
@@ -878,19 +963,27 @@ function valueDescription(value: Value, ctx: SemanticContext): string {
   if (value.literal !== undefined) {
     const type = valueType(value.literal);
     if (type === 'object' || type === 'array') {
-      return schemaDescription(value.schema, schemaRoot(value), ctx.runtime);
+      return schemaDescription(
+        value.schema,
+        schemaRootForValue(value),
+        ctx.runtime
+      );
     }
     return type;
   }
   const namedReceiver = namedMethodReceivers(
     value.schema,
-    schemaRoot(value),
+    schemaRootForValue(value),
     ctx.runtime
   )[0];
   if (namedReceiver) {
     return namedReceiver;
   }
-  return schemaDescription(value.schema, schemaRoot(value), ctx.runtime);
+  return schemaDescription(
+    value.schema,
+    schemaRootForValue(value),
+    ctx.runtime
+  );
 }
 
 function availableProperties(
@@ -1054,7 +1147,7 @@ function isKnownNonCallable(value: Value, ctx: SemanticContext): boolean {
   }
   const variants = resolveSchemaVariants(
     value.schema,
-    schemaRoot(value),
+    schemaRootForValue(value),
     ctx.runtime
   );
   return (
@@ -1243,8 +1336,14 @@ function analyzeCall(
   const resultSchema =
     signatures.length === 1
       ? signature.returns
-      : createUnionSchema(signatures.map((item) => item.returns));
-  return { schema: resultSchema, root: resultSchema };
+      : createUnionSchema(
+          signatures.map((item) => item.returns),
+          signatures.map((item) => schemaRootFor(item.returns, item.returns))
+        );
+  return {
+    schema: resultSchema,
+    root: schemaRootFor(resultSchema, resultSchema),
+  };
 }
 
 function unknownRuntimeSymbolMessage(
@@ -1311,7 +1410,7 @@ function methodReceivers(
   receiver: Value,
   runtime: OpelRuntime
 ): OpelMethodReceiver[] {
-  const root = schemaRoot(receiver);
+  const root = schemaRootForValue(receiver);
   const ordered = namedMethodReceivers(receiver.schema, root, runtime);
   for (const type of getSchemaTypes(receiver.schema, root, runtime)) {
     if (type === 'integer') {
@@ -1333,7 +1432,7 @@ function resolveMethods(
 ): (OpelCallable | null | undefined)[] {
   return resolveSchemaVariants(
     receiver.schema,
-    schemaRoot(receiver),
+    schemaRootForValue(receiver),
     ctx.runtime
   )
     .flatMap((variant) => {
@@ -1396,6 +1495,9 @@ function analyzeMethodCall(
 ): Value {
   if (receiver.error) {
     return { schema: true };
+  }
+  if (isImpossibleValue(receiver, ctx)) {
+    return { schema: false, root: schemaRootForValue(receiver) };
   }
   const alternatives = resolveMethods(receiver, name, ctx);
   if (alternatives.length === 0) {
@@ -1465,15 +1567,19 @@ function analyzeMethodCall(
       ctx.diagnostics.push(diagnostic);
     }
   }
+  const resultValues = results.map((result) => ({
+    schema: result.schema,
+    root: schemaRootForValue(result),
+  }));
+  if (supported.includes(undefined)) {
+    // An unknown receiver alternative may return any schema, so keep that result in the join.
+    resultValues.push({ schema: true, root: receiver.schema });
+  }
   return {
-    schema:
-      supported.includes(undefined) ||
-      results.some((result) => result.schema === true)
-        ? true
-        : createUnionSchema(
-            results.map((result) => result.schema),
-            results.map(schemaRoot)
-          ),
+    schema: createUnionSchema(
+      resultValues.map((result) => result.schema),
+      resultValues.map((result) => result.root)
+    ),
   };
 }
 
@@ -1487,17 +1593,24 @@ function resolvePropertyAccess(
   if (receiver.error || receiver.schema === true) {
     return { schema: true };
   }
+  if (isImpossibleValue(receiver, ctx)) {
+    return { schema: false, root: schemaRootForValue(receiver) };
+  }
   const supports: Value[] = [];
   let hasExplicitSupport = false;
   let unsupported = 0;
-  const receiverRoot = schemaRoot(receiver);
-  for (const resolution of resolveSchemaVariants(
+  const receiverRoot = schemaRootForValue(receiver);
+  const variants = resolveSchemaVariants(
     receiver.schema,
     receiverRoot,
     ctx.runtime
-  )) {
+  );
+  for (const resolution of variants) {
     const variant = resolution.schema;
     if (variant === true) {
+      return { schema: true };
+    }
+    if (variant === false) {
       continue;
     }
     const types = getSchemaTypes(variant, resolution.root, ctx.runtime);
@@ -1576,7 +1689,7 @@ function resolvePropertyAccess(
     const properties = availableProperties(
       receiver.schema,
       ctx,
-      schemaRoot(receiver)
+      schemaRootForValue(receiver)
     );
     const propertyHint = formatPropertyHint(name, properties);
     const message = hasExplicitSupport
@@ -1593,7 +1706,7 @@ function resolvePropertyAccess(
   return {
     schema: createUnionSchema(
       supports.map((value) => value.schema),
-      supports.map((value) => schemaRoot(value))
+      supports.map((value) => schemaRootForValue(value))
     ),
     root: supports[0]?.root ?? receiverRoot,
     ...(callable ? { callable } : {}),
@@ -1608,7 +1721,8 @@ function lookupIdentifier(
 ): Value | undefined {
   const localBinding = env.get(name);
   if (localBinding) {
-    return localBinding;
+    localBinding.used = true;
+    return localBinding.value;
   }
   const globals = ctx.runtime.globals;
   if (globals && Object.prototype.hasOwnProperty.call(globals, name)) {

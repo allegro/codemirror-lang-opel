@@ -160,6 +160,106 @@ describe('unconstrained inference alternatives', () => {
     ).toBe(true);
   });
 
+  it.each(["pick(selector) + '!'", "'!' + pick(selector)"])(
+    'allows string concatenation with an unknown result: %s',
+    (expression) => {
+      const runtime: OpelRuntime = {
+        ...geometryRuntime,
+        globals: { selector: true },
+        functions: {
+          ...geometryRuntime.functions,
+          pick: {
+            signatures: [
+              {
+                parameters: [{ schema: { type: 'integer' } }],
+                returns: { type: 'string' },
+              },
+              {
+                parameters: [{ schema: { type: 'string' } }],
+                returns: true,
+              },
+            ],
+          },
+        },
+      };
+
+      expect(lint(`acceptString(${expression})`, { runtime })).toEqual([
+        expect.objectContaining({
+          severity: 'warning',
+          message: expect.stringContaining(
+            'Multiple function signatures could match this call'
+          ),
+        }),
+      ]);
+    }
+  );
+
+  it.each([
+    ['the unknown alternative is first', true],
+    ['the unknown alternative is last', false],
+  ] as const)(
+    'warns about deprecated properties in either schema order: %s',
+    (_description, unknownFirst) => {
+      const objectSchema: OpelSchema = {
+        type: 'object',
+        properties: {
+          old: { type: 'string', deprecated: 'Use current instead.' },
+        },
+        additionalProperties: false,
+      };
+      const runtime: OpelRuntime = {
+        ...geometryRuntime,
+        globals: {
+          value: {
+            anyOf: unknownFirst ? [true, objectSchema] : [objectSchema, true],
+          },
+        },
+      };
+
+      expect(lint('acceptInteger(value.old)', { runtime })).toEqual([
+        expect.objectContaining({
+          severity: 'warning',
+          message: 'Use current instead.',
+        }),
+      ]);
+      expect(lint('value.missing', { runtime })).toEqual([]);
+    }
+  );
+
+  it('keeps string item types when an array may also be null', () => {
+    const runtime: OpelRuntime = {
+      ...geometryRuntime,
+      globals: {
+        items: {
+          anyOf: [
+            { type: 'array', items: { type: 'string' } },
+            { type: 'null' },
+          ],
+        },
+      },
+    };
+
+    expect(lint('acceptInteger(items[0])', { runtime })).toEqual([
+      expect.objectContaining({
+        severity: 'error',
+        message: expect.stringContaining("argument of type 'string'"),
+      }),
+    ]);
+  });
+
+  it('keeps an unknown array alternative permissive', () => {
+    const runtime: OpelRuntime = {
+      ...geometryRuntime,
+      globals: {
+        items: {
+          anyOf: [{ type: 'array', items: { type: 'string' } }, {}],
+        },
+      },
+    };
+
+    expect(lint('acceptInteger(items[0])', { runtime })).toEqual([]);
+  });
+
   // Union inference must not change when the alternatives are reordered.
   it.each([
     ['the integer-item alternative is first', false],

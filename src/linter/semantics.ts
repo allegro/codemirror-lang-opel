@@ -436,6 +436,14 @@ function analyzePostfixExpression(
               receiverRoot,
               ctx.runtime
             ).flatMap((resolution) => {
+              const types = getSchemaTypes(
+                resolution.schema,
+                resolution.root,
+                ctx.runtime
+              );
+              if (types.length > 0 && !types.includes('array')) {
+                return [];
+              }
               const items = schemaObject(resolution.schema)?.items as
                 | OpelSchema
                 | undefined;
@@ -700,16 +708,17 @@ function analyzeOperators(
     }
     if (
       node.name === NODE.AdditiveExpression &&
-      node.getChildren(NODE.Plus).length > 0 &&
-      values.every((value) =>
-        getSchemaTypes(
-          value.schema,
-          schemaRootForValue(value),
-          ctx.runtime
-        ).includes('string')
-      )
+      node.getChildren(NODE.Plus).length > 0
     ) {
-      return { schema: { type: 'string' } };
+      const operandTypes = values.map((value) =>
+        getSchemaTypes(value.schema, schemaRootForValue(value), ctx.runtime)
+      );
+      if (operandTypes.some((types) => types.length === 0)) {
+        return { schema: true };
+      }
+      if (operandTypes.every((types) => types.includes('string'))) {
+        return { schema: { type: 'string' } };
+      }
     }
     if (
       (node.name === NODE.AdditiveExpression &&
@@ -1598,6 +1607,7 @@ function resolvePropertyAccess(
   }
   const supports: Value[] = [];
   let hasExplicitSupport = false;
+  let hasUnknownVariant = false;
   let unsupported = 0;
   const receiverRoot = schemaRootForValue(receiver);
   const variants = resolveSchemaVariants(
@@ -1608,7 +1618,8 @@ function resolvePropertyAccess(
   for (const resolution of variants) {
     const variant = resolution.schema;
     if (variant === true) {
-      return { schema: true };
+      hasUnknownVariant = true;
+      continue;
     }
     if (variant === false) {
       continue;
@@ -1683,6 +1694,9 @@ function resolvePropertyAccess(
         });
       }
     }
+  }
+  if (hasUnknownVariant) {
+    return { schema: true };
   }
   if (unsupported > 0) {
     const schemaName = schemaDisplayName(receiver.schema, ctx.runtime);

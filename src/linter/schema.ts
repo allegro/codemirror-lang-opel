@@ -64,7 +64,7 @@ export function createUnionSchema(
     }
   }
   if (flattened.length === 0) {
-    return schemas.length === 0 ? true : false;
+    return schemas.length === 0;
   }
   if (flattened.length === 1) {
     rememberSchemaRoot(flattened[0], flattenedRoots[0]);

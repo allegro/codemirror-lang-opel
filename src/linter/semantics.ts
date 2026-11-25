@@ -1323,7 +1323,7 @@ function analyzeCall(
       addDiagnostic(
         node,
         'warning',
-        `Call is ambiguous; matches ${signatures.map((signature) => `(${signature.parameters.map((parameter) => schemaDescription(parameter.schema, parameter.schema, ctx.runtime)).join(', ')})`).join(' and ')}.`,
+        `Multiple function signatures could match this call: ${signatures.map((signature) => `(${signature.parameters.map((parameter) => schemaDescription(parameter.schema, parameter.schema, ctx.runtime)).join(', ')})`).join(' and ')}.`,
         ctx.diagnostics
       );
     }

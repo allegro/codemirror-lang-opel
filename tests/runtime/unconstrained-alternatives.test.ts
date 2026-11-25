@@ -121,7 +121,7 @@ function localReferenceRuntime(reverse: boolean): OpelRuntime {
 }
 
 describe('unconstrained inference alternatives', () => {
-  it('keeps an unknown overload result permissive after property access', () => {
+  it('does not reject a property on an unknown function result', () => {
     const diagnostics = lint('acceptInteger(sketch(selector).missing)', {
       runtime: geometryRuntime,
     });
@@ -129,12 +129,14 @@ describe('unconstrained inference alternatives', () => {
     expect(diagnostics).toEqual([
       expect.objectContaining({
         severity: 'warning',
-        message: expect.stringContaining('Call is ambiguous'),
+        message: expect.stringContaining(
+          'Multiple function signatures could match this call'
+        ),
       }),
     ]);
   });
 
-  it('still reports typos on a known closed overload result', () => {
+  it('reports a missing property on a closed return type', () => {
     const diagnostics = lint('sketch(1).missing', { runtime: geometryRuntime });
 
     expect(diagnostics).toEqual([
@@ -159,9 +161,12 @@ describe('unconstrained inference alternatives', () => {
   });
 
   // Union inference must not change when the alternatives are reordered.
-  it.each([false, true])(
-    'keeps omitted array items unknown regardless of alternative order (%s)',
-    (reverse) => {
+  it.each([
+    ['the integer-item alternative is first', false],
+    ['the integer-item alternative is second', true],
+  ] as const)(
+    'treats unspecified array items as unknown in either schema order: %s',
+    (_description, reverse) => {
       const arrays: OpelSchema[] = [
         { type: 'array', items: { type: 'integer' } },
         { type: 'array' },
@@ -179,9 +184,12 @@ describe('unconstrained inference alternatives', () => {
   );
 
   // Each overload result has its own local-ref root, regardless of union order.
-  it.each([false, true])(
-    'keeps local reference roots for each overload result (%s)',
-    (reverse) => {
+  it.each([
+    ['the integer overload is first', false],
+    ['the integer overload is second', true],
+  ] as const)(
+    'keeps local reference roots for each overload result: %s',
+    (_description, reverse) => {
       const diagnostics = lint(
         'consume(choose(selector).first, choose(selector).second)',
         { runtime: localReferenceRuntime(reverse) }
@@ -191,12 +199,16 @@ describe('unconstrained inference alternatives', () => {
         diagnostics.filter((item) => item.message.includes('Type mismatch'))
       ).toHaveLength(0);
       expect(
-        diagnostics.filter((item) => item.message.includes('Call is ambiguous'))
+        diagnostics.filter((item) =>
+          item.message.includes(
+            'Multiple function signatures could match this call'
+          )
+        )
       ).toHaveLength(2);
     }
   );
 
-  it('keeps local reference roots for values inside object literals', () => {
+  it("preserves a returned value's type when storing it in an object", () => {
     // `make()` returns a local ref whose definition lives on the return schema.
     // After wrapping it, `.child.id` should still resolve to string, so passing it
     // to `acceptInteger` must report a type mismatch.
@@ -234,7 +246,7 @@ describe('unconstrained inference alternatives', () => {
     );
   });
 
-  it('keeps impossible method results out of conditional joins', () => {
+  it('ignores an impossible method result when checking a conditional', () => {
     const runtime: OpelRuntime = {
       globals: {
         selector: { type: 'boolean' },
@@ -282,7 +294,7 @@ describe('unconstrained inference alternatives', () => {
     ).toBe(true);
   });
 
-  it('keeps forbidden array items out of inferred unions', () => {
+  it('ignores an array variant that cannot contain items', () => {
     const runtime: OpelRuntime = {
       ...geometryRuntime,
       globals: {
@@ -303,7 +315,7 @@ describe('unconstrained inference alternatives', () => {
     ).toBe(true);
   });
 
-  it('keeps property access on an impossible receiver impossible', () => {
+  it('property and index access on an impossible value stay impossible', () => {
     const options = { runtime: { globals: { impossible: false } } };
     const diagnostics = [
       ...lint('(impossible.missing)()', options),

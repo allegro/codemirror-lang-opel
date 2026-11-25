@@ -30,7 +30,7 @@ export const OPEL_NODE_NAMES = {
   PostfixExpression: 'PostfixExpression', // A base expression followed by postfix access/calls.
   Postfix: 'Postfix', // One chained access or call, such as `.name`, `[key]`, `.method()`, or `(argument)`.
   Primary: 'Primary', // An expression that can be followed by postfix syntax, such as `user` in `user.name` or `makeUser()` in `makeUser().id`.
-  Atom: 'Atom', // A self-contained expression, such as `user`, `42`, `"text"`, `[1, 2]`, `{name: "Ada"}`, or `(a + b)`.
+  Atom: 'Atom', // A self-contained expression, such as `user`, `42`, `"text"`, `[1, 2]`, `{'name': "Ada"}`, or `(a + b)`.
   NamedValue: 'NamedValue', // A literal keyword or identifier reference.
   Identifier: 'Identifier', // An OPEL identifier token.
   Number: 'Number', // An integer or floating-point literal.

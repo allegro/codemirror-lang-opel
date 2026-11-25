@@ -335,9 +335,12 @@ describe('unconstrained inference alternatives', () => {
     };
 
     expect(
-      lint('val wrapped = { child: make() }; acceptInteger(wrapped.child.id)', {
-        runtime,
-      })
+      lint(
+        "val wrapped = { 'child': make() }; acceptInteger(wrapped.child.id)",
+        {
+          runtime,
+        }
+      )
     ).toContainEqual(
       expect.objectContaining({
         severity: 'error',

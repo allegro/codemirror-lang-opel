@@ -254,7 +254,7 @@ describe('runtime semantic edge cases', () => {
     ).toHaveLength(1);
 
     const objectDiagnostics = lint(
-      'acceptInteger(({child: user.child}).child.name)',
+      "acceptInteger(({'child': user.child}).child.name)",
       {
         runtime: {
           schemas: {

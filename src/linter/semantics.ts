@@ -24,6 +24,7 @@ import {
   combineSchemaValues,
   resolveSchemaVariants,
   getSchemaTypes,
+  schemaAllowsType,
   valueType,
   matchingPatternProperties,
   literalEqual,
@@ -618,13 +619,84 @@ function analyzeList(
   };
 }
 
+type MapKeyNames = {
+  // Available only when the entire key domain is a finite set of strings.
+  names: Set<string> | undefined;
+  // Undefined allows any string; a set may coexist with non-string keys.
+  possibleNames: Set<string> | undefined;
+};
+
+function mapKeyNames(key: Value, ctx: SemanticContext): MapKeyNames {
+  if (typeof key.literal === 'string') {
+    const names = new Set([key.literal]);
+    return { names, possibleNames: names };
+  }
+  if (key.literal !== undefined) {
+    return { names: undefined, possibleNames: new Set() };
+  }
+  const names = new Set<string>();
+  let finiteStringNames = true;
+  let allowsAnyString = false;
+  for (const variant of resolveSchemaVariants(
+    key.schema,
+    schemaRootForValue(key),
+    ctx.runtime
+  )) {
+    if (variant.schema === false) {
+      continue;
+    }
+    const object = schemaObject(variant.schema);
+    const constant = object?.const;
+    const enumValues = object?.enum;
+    const candidates =
+      constant !== undefined
+        ? [constant]
+        : Array.isArray(enumValues)
+          ? enumValues
+          : undefined;
+    const allowsString = schemaAllowsType(
+      variant.schema,
+      'string',
+      variant.root,
+      ctx.runtime
+    );
+    if (!candidates) {
+      finiteStringNames = false;
+      allowsAnyString ||= allowsString;
+      continue;
+    }
+    const matchesEnum =
+      constant === undefined ||
+      !Array.isArray(enumValues) ||
+      enumValues.some((value) => literalEqual(value, constant));
+    for (const name of candidates) {
+      if (typeof name !== 'string') {
+        finiteStringNames = false;
+        continue;
+      }
+      if (allowsString && matchesEnum) {
+        names.add(name);
+      }
+    }
+  }
+  return {
+    names: finiteStringNames && names.size > 0 ? names : undefined,
+    // Prepare overlap checks once, including string choices in mixed domains.
+    // An undefined set allows any string, regardless of alternative order.
+    possibleNames: allowsAnyString ? undefined : names,
+  };
+}
+
 function analyzeMap(
   map: SyntaxNode,
   env: Environment,
   ctx: SemanticContext
 ): Value {
-  const literal: Record<string, unknown> = {};
-  const properties: Record<string, OpelSchema> = {};
+  const entries: (MapKeyNames & {
+    value: Value;
+    identity: Value | string | undefined;
+  })[] = [];
+  const lastEntryByIdentity = new Map<Value | string, number>();
   const pairs = map.getChild(NODE.Pairs);
   for (const pair of pairs ? pairs.getChildren(NODE.Pair) : []) {
     const key = pair.firstChild;
@@ -632,42 +704,93 @@ function analyzeMap(
     if (!key || !valueNode) {
       continue;
     }
-    const keyText = ctx.source.slice(key.from, key.to);
-    const atom = key.getChild(NODE.Atom);
-    const literalKey = readLiteralValue(
-      atom?.getChild(NODE.StringLiteral) ?? key,
-      ctx.source
+    const keyValue = analyzeExpression(key, env, ctx);
+    const value = analyzeExpression(valueNode, env, ctx);
+    const propertyRoot = schemaRootForValue(value);
+    const propertySchema = createUnionSchema(
+      [value.callable ? { callable: value.callable } : value.schema],
+      [propertyRoot]
     );
-    const keyValue = literalKey.hasLiteralValue
-      ? literalKey.value
-      : atom?.getChild(NODE.NamedValue)?.getChild(NODE.Identifier)
-        ? keyText
-        : undefined;
-    if (typeof keyValue === 'string') {
-      const value = analyzeExpression(valueNode, env, ctx);
-      const propertySchema = value.callable
-        ? { callable: value.callable }
-        : value.schema;
-      properties[keyValue] = createUnionSchema(
-        [propertySchema],
-        [schemaRootForValue(value)]
-      );
-      if (value.literal !== undefined) {
-        literal[keyValue] = value.literal;
+    const identifier = key
+      .getChild(NODE.Atom)
+      ?.getChild(NODE.NamedValue)
+      ?.getChild(NODE.Identifier);
+    const name = identifier
+      ? ctx.source.slice(identifier.from, identifier.to)
+      : undefined;
+    const identity =
+      name === undefined ? undefined : (env.get(name)?.value ?? name);
+    if (identity !== undefined) {
+      lastEntryByIdentity.set(identity, entries.length);
+    }
+    entries.push({
+      value: { ...value, schema: propertySchema, root: propertyRoot },
+      ...mapKeyNames(keyValue, ctx),
+      identity,
+    });
+  }
+  // Analyze overwritten entries too, then omit them from the resulting shape.
+  const remaining = entries.filter(
+    (entry, index) =>
+      entry.identity === undefined ||
+      lastEntryByIdentity.get(entry.identity) === index
+  );
+  const properties: Record<string, OpelSchema> = Object.create(null);
+  const required: string[] = [];
+  const names = new Set(
+    remaining.flatMap((entry) => (entry.names ? [...entry.names] : []))
+  );
+  for (const name of names) {
+    const values: Value[] = [];
+    let guaranteed = false;
+    for (const entry of remaining) {
+      if (entry.names?.size === 1 && entry.names.has(name)) {
+        values.length = 0;
+        values.push(entry.value);
+        guaranteed = true;
+      } else if (
+        entry.possibleNames === undefined ||
+        entry.possibleNames.has(name)
+      ) {
+        values.push(entry.value);
       }
+    }
+    properties[name] = createUnionSchema(
+      values.map((value) => value.schema),
+      values.map(schemaRootForValue)
+    );
+    if (guaranteed) {
+      required.push(name);
+    }
+  }
+  const additionalValues = remaining
+    .filter((entry) => entry.names === undefined)
+    .map((entry) => entry.value);
+  const literal: Record<string, unknown> = Object.create(null);
+  let hasLiteral = true;
+  for (const entry of remaining) {
+    const name =
+      entry.names?.size === 1 ? entry.names.values().next().value : undefined;
+    if (name === undefined || entry.value.literal === undefined) {
+      hasLiteral = false;
+    } else {
+      literal[name] = entry.value.literal;
     }
   }
   return {
     schema: {
       type: 'object',
       properties,
-      required: Object.keys(properties),
-      additionalProperties: false,
+      required,
+      additionalProperties:
+        additionalValues.length === 0
+          ? false
+          : createUnionSchema(
+              additionalValues.map((value) => value.schema),
+              additionalValues.map(schemaRootForValue)
+            ),
     },
-    literal:
-      Object.keys(literal).length === Object.keys(properties).length
-        ? literal
-        : undefined,
+    literal: hasLiteral ? literal : undefined,
   };
 }
 

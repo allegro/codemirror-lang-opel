@@ -525,7 +525,7 @@ describe('runtime-aware semantics', () => {
     ).toHaveLength(1);
   });
 
-  it('infers bare object keys and requires present non-literal properties', () => {
+  it('infers quoted object keys and requires present non-literal properties', () => {
     const options = {
       runtime: {
         globals: { text: { type: 'string' } },
@@ -565,8 +565,8 @@ describe('runtime-aware semantics', () => {
       },
     } as const;
 
-    expect(lint('acceptInteger({id: text})', options)).toHaveLength(1);
-    expect(lint('acceptRequired({id: text})', options)).toHaveLength(0);
+    expect(lint("acceptInteger({'id': text})", options)).toHaveLength(1);
+    expect(lint("acceptRequired({'id': text})", options)).toHaveLength(0);
     const missingRequiredProperty = lint('acceptRequired({})', options);
     expect(
       missingRequiredProperty.some((diagnostic) =>

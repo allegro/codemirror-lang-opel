@@ -43,9 +43,9 @@ describe('variable declaration order', () => {
           d.message.includes('identity') && d.message.includes('not declared')
       )
     ).toHaveLength(0);
-    expect(diagnostics.some((d) => d.message.includes('Unknown function'))).toBe(
-      true
-    );
+    expect(
+      diagnostics.some((d) => d.message.includes('Unknown function'))
+    ).toBe(true);
   });
 
   it('does not treat method call names on values as undeclared variables', () => {
@@ -70,7 +70,7 @@ describe('variable declaration order', () => {
 
 describe('unused variable warnings', () => {
   it('warns when a declared variable is never used', () => {
-    const diagnostics = lint("val x = 1;");
+    const diagnostics = lint('val x = 1;');
     const unused = diagnostics.filter((d) => d.message.includes('never used'));
 
     expect(unused).toHaveLength(1);
@@ -79,12 +79,14 @@ describe('unused variable warnings', () => {
   });
 
   it('does not warn when a declared variable is used', () => {
-    const diagnostics = lint("val x = 1; x");
-    expect(diagnostics.filter((d) => d.message.includes('never used'))).toHaveLength(0);
+    const diagnostics = lint('val x = 1; x');
+    expect(
+      diagnostics.filter((d) => d.message.includes('never used'))
+    ).toHaveLength(0);
   });
 
   it('warns for each unused variable independently', () => {
-    const diagnostics = lint("val x = 1; val y = 2; val z = 3; z");
+    const diagnostics = lint('val x = 1; val y = 2; val z = 3; z');
     const unused = diagnostics.filter((d) => d.message.includes('never used'));
 
     expect(unused).toHaveLength(2);

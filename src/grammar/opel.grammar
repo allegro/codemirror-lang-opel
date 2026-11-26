@@ -124,7 +124,7 @@ Args {
 NamedValue {
   @specialize[@name=BooleanLiteral]<identifier, "true" | "false"> |
   @specialize[@name=NullLiteral]<identifier, "null"> |
-  Identifier
+  Identifier ~parenIdentifier
 }
 
 StringLiteral {
@@ -156,7 +156,7 @@ LambdaParams {
 
 MultiParam {
   LParen RParen |
-  LParen Identifier !lambda RParen |
+  LParen Identifier ~parenIdentifier RParen |
   LParen Identifier (Comma Identifier)+ RParen
 }
 

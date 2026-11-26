@@ -21,4 +21,14 @@ describe('lambda definition warnings', () => {
 
     expect(lambdaWarnings).toHaveLength(0);
   });
+
+  it('treats a parenthesized identifier as a value unless an arrow follows', () => {
+    for (const source of [
+      'val item = 1; (item) == 1',
+      'val item = 1; if ((item) == 1) 1 else 2',
+      'val item = [1]; (item)[0]',
+    ]) {
+      expect(lint(source), source).toEqual([]);
+    }
+  });
 });

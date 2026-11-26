@@ -131,6 +131,8 @@ Non-array `enum` values and invalid callable definitions nested in schemas are c
 
 Schema validation allows recursive `$ref` properties but rejects paths deeper than 128 schema objects. Compatibility comparisons beyond 128 distinct recursive pairs are treated as unknown.
 
+For member access, the linter reserves numeric indices for lists and reports numeric keys on known objects, even though the OPEL runtime can use numeric map keys. This intentional discrepancy provides a useful hint when a user expects an array but is actually working with an object. String keys such as `'0'` remain valid object properties.
+
 ## Development
 
 ### Prerequisites

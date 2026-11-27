@@ -173,21 +173,30 @@ function analyzeUnary(
   env: Environment,
   ctx: SemanticContext
 ): Value {
-  const operand: Value = node.lastChild
-    ? analyzeExpression(node.lastChild, env, ctx)
+  const operandNode = node.lastChild;
+  const operand: Value = operandNode
+    ? analyzeExpression(operandNode, env, ctx)
     : { schema: true };
-  const operator = node.firstChild?.name;
-  if (operator !== NODE.Not && operator !== NODE.Minus) {
+  const operator = node.firstChild;
+  if (operator?.name === NODE.Not) {
+    if (
+      operandNode &&
+      !validateLogicalOperand(operandNode, operand, operator, ctx)
+    ) {
+      return { schema: true, error: true };
+    }
+    return {
+      schema: { type: 'boolean' },
+      literal:
+        typeof operand.literal === 'boolean' ? !operand.literal : undefined,
+    };
+  }
+  if (operator?.name !== NODE.Minus) {
     return operand;
   }
   let literal: unknown;
   let schema: OpelSchema = true;
-  if (operator === NODE.Not) {
-    schema = { type: 'boolean' };
-    if (typeof operand.literal === 'boolean') {
-      literal = !operand.literal;
-    }
-  } else if (typeof operand.literal === 'number') {
+  if (typeof operand.literal === 'number') {
     literal = -operand.literal;
     schema = { type: valueType(literal) as OpelPrimitive };
   } else {
@@ -589,11 +598,22 @@ function analyzeOperators(
   const parts = expressionChildren(node);
   if (parts.length > 0) {
     const values = parts.map((part) => analyzeExpression(part, env, ctx));
+    const logicalOperator =
+      node.getChild(NODE.LogicalOr) ?? node.getChild(NODE.LogicalAnd);
+    if (logicalOperator) {
+      let valid = true;
+      for (const [index, part] of parts.entries()) {
+        if (
+          !validateLogicalOperand(part, values[index], logicalOperator, ctx)
+        ) {
+          valid = false;
+        }
+      }
+      return valid
+        ? { schema: { type: 'boolean' } }
+        : { schema: true, error: true };
+    }
     const isBooleanExpression =
-      (node.name === NODE.OrExpression &&
-        node.getChildren(NODE.LogicalOr).length > 0) ||
-      (node.name === NODE.AndExpression &&
-        node.getChildren(NODE.LogicalAnd).length > 0) ||
       (node.name === NODE.EqualityExpression &&
         (node.getChildren(NODE.EqualityOp).length > 0 ||
           node.getChildren(NODE.InequalityOp).length > 0)) ||
@@ -639,6 +659,40 @@ function analyzeOperators(
     return values[values.length - 1];
   }
   return { schema: true };
+}
+
+function validateLogicalOperand(
+  node: SyntaxNode,
+  value: Value,
+  operator: SyntaxNode,
+  ctx: SemanticContext
+): boolean {
+  if (value.error) {
+    return false;
+  }
+  // OPEL converts null to false for && and ||, but !null fails.
+  const acceptsNull = operator.name !== NODE.Not;
+  const types = getSchemaTypes(value.schema, schemaRoot(value), ctx.runtime);
+  if (
+    types.every(
+      (type) =>
+        type === 'boolean' ||
+        type === 'never' ||
+        (acceptsNull && type === 'null')
+    )
+  ) {
+    return true;
+  }
+
+  const operatorText = ctx.source.slice(operator.from, operator.to);
+  const expected = acceptsNull ? 'boolean or null' : 'boolean';
+  addDiagnostic(
+    node,
+    'error',
+    `Operator '${operatorText}' cannot be applied to type '${valueDescription(value, ctx)}'. Expected ${expected}.`,
+    ctx.diagnostics
+  );
+  return false;
 }
 
 // Every pair of known union alternatives must accept the operator; unknown types stay permissive.

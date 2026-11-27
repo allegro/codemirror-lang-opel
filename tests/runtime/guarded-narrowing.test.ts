@@ -102,7 +102,7 @@ describe('null-guarded semantic analysis', () => {
     }
   });
 
-  it('keeps aliases stable but does not reuse facts for another call, shadow, or later access', () => {
+  it('keeps aliases stable but does not reuse facts for another call or shadow', () => {
     const alias =
       'val item = sketch(1); val alias = item; if (item != null) alias.id else null';
     expect(
@@ -119,15 +119,6 @@ describe('null-guarded semantic analysis', () => {
     expect(
       diagnosticsWith('Property "id" is only defined for some variants', calls)
     ).toHaveLength(1);
-
-    const after =
-      'val item = sketch(1); val guarded = if (item != null) item.id else null; item.id';
-    const warning = diagnosticsWith(
-      'Property "id" is only defined for some variants',
-      after
-    );
-    expect(warning).toHaveLength(1);
-    expect(warning[0].from).toBe(after.lastIndexOf('.id'));
   });
 
   it('uses branch facts while linting an unfinished if without hiding its syntax error', () => {
@@ -249,9 +240,12 @@ describe('null-guarded semantic analysis', () => {
   it('does not use a true-only fact after a conditional or in the opposite branch', () => {
     const after =
       'val item = sketch(1); val guarded = if (item != null) item.id else null; item.id';
-    expect(
-      diagnosticsWith('Property "id" is only defined for some variants', after)
-    ).toHaveLength(1);
+    const warning = diagnosticsWith(
+      'Property "id" is only defined for some variants',
+      after
+    );
+    expect(warning).toHaveLength(1);
+    expect(warning[0].from).toBe(after.lastIndexOf('.id'));
 
     const opposite =
       'val item = sketch(1); if (item == null) null else item.id';
@@ -529,7 +523,7 @@ describe('discriminator narrowing', () => {
     ).toBe(true);
   });
 
-  it('validates the PR 4 verification expression and retains the unguarded warning', () => {
+  it('narrows a nullable union through a null check and kind check combined with &&, retaining the unguarded warning', () => {
     const guarded =
       "val item = sketch(1); if (item != null && item.kind == 'circle') item.radius else null";
     expect(lint(guarded, { runtime: geometryRuntime })).toEqual([]);

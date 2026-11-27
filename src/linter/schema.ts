@@ -11,7 +11,7 @@ const SCHEMA_BRANCH_REFERENCES = new WeakMap<
 // allOf sibling constraints do not participate in branch-specific property checks.
 const OWN_SCHEMA_CONSTRAINTS = new WeakSet<object>();
 
-type SchemaResolution = {
+export type SchemaResolution = {
   schema: OpelSchema;
   root: OpelSchema;
   references?: string[];

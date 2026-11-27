@@ -29,6 +29,7 @@ import {
   matchingPatternProperties,
   literalEqual,
 } from './schema';
+import type { SchemaResolution } from './schema';
 
 const EXPRESSION_NODES = new Set<string>([
   NODE.Expression,
@@ -310,46 +311,41 @@ function analyzeUnary(
   if (operator !== NODE.Not && operator !== NODE.Minus) {
     return operand;
   }
-  let literal: unknown;
-  let schema: OpelSchema = true;
   if (operator === NODE.Not) {
-    schema = { type: 'boolean' };
-    if (typeof operand.literal === 'boolean') {
-      literal = !operand.literal;
-    }
     return {
-      schema,
-      literal,
+      schema: { type: 'boolean' },
+      literal:
+        typeof operand.literal === 'boolean' ? !operand.literal : undefined,
       error: operand.error,
       ...(operand.condition
         ? { condition: invertCondition(operand.condition) }
         : {}),
     };
-  } else if (typeof operand.literal === 'number') {
-    literal = -operand.literal;
-    schema = { type: valueType(literal) as OpelPrimitive };
+  }
+  if (typeof operand.literal === 'number') {
+    const literal = -operand.literal;
     return {
-      schema,
+      schema: { type: valueType(literal) as OpelPrimitive },
       literal,
       error: operand.error,
       numericText: operand.numericText ? `-${operand.numericText}` : undefined,
     };
-  } else {
-    const types = getSchemaTypes(
-      operand.schema,
-      schemaRootForValue(operand),
-      ctx.runtime
-    );
-    if (
-      types.length > 0 &&
-      types.every((type) => type === 'integer' || type === 'number')
-    ) {
-      schema = {
-        type: types.every((type) => type === 'integer') ? 'integer' : 'number',
-      };
-    }
   }
-  return { schema, literal, error: operand.error };
+  let schema: OpelSchema = true;
+  const types = getSchemaTypes(
+    operand.schema,
+    schemaRootForValue(operand),
+    ctx.runtime
+  );
+  if (
+    types.length > 0 &&
+    types.every((type) => type === 'integer' || type === 'number')
+  ) {
+    schema = {
+      type: types.every((type) => type === 'integer') ? 'integer' : 'number',
+    };
+  }
+  return { schema, error: operand.error };
 }
 
 function analyzeConditional(
@@ -395,8 +391,9 @@ function analyzeConditional(
 
 type Narrowing = { schema: OpelSchema; root: OpelSchema; possible: boolean };
 
-function copyNarrowings(narrowings: PathNarrowings): PathNarrowings {
-  return new Map(narrowings);
+// A fresh copy of the narrowings in scope, safe to extend for one branch.
+function narrowingsInScope(env: Environment): PathNarrowings {
+  return new Map(environmentNarrowings(env));
 }
 
 // Keep only paths narrowed on every route, combining their possible schemas.
@@ -426,26 +423,10 @@ function conditionFromValue(value: Value, env: Environment): ConditionResult {
   if (value.condition) {
     return value.condition;
   }
-  const narrowings = copyNarrowings(environmentNarrowings(env));
-  if (value.literal === true) {
-    return {
-      canBeTrue: true,
-      canBeFalse: false,
-      whenTrue: narrowings,
-      whenFalse: narrowings,
-    };
-  }
-  if (value.literal === false) {
-    return {
-      canBeTrue: false,
-      canBeFalse: true,
-      whenTrue: narrowings,
-      whenFalse: narrowings,
-    };
-  }
+  const narrowings = narrowingsInScope(env);
   return {
-    canBeTrue: true,
-    canBeFalse: true,
+    canBeTrue: value.literal !== false,
+    canBeFalse: value.literal !== true,
     whenTrue: narrowings,
     whenFalse: narrowings,
   };
@@ -468,38 +449,22 @@ function invertCondition(condition: ConditionResult): ConditionResult {
   };
 }
 
-function joinedOutcome(
-  paths: {
-    reachable: boolean;
-    narrowings: PathNarrowings;
-  }[]
-): {
-  reachable: boolean;
-  narrowings: PathNarrowings;
-} {
-  const reachable = paths.filter((path) => path.reachable);
-  return {
-    reachable: reachable.length > 0,
-    narrowings: joinNarrowings(reachable.map((path) => path.narrowings)),
-  };
-}
-
 function combineAnd(
   left: ConditionResult,
   right: ConditionResult
 ): ConditionResult {
-  const whenFalse = joinedOutcome([
+  const falsePaths = [
     { reachable: left.canBeFalse, narrowings: left.whenFalse },
     {
       reachable: left.canBeTrue && right.canBeFalse,
       narrowings: right.whenFalse,
     },
-  ]);
+  ].filter((path) => path.reachable);
   return {
     canBeTrue: left.canBeTrue && right.canBeTrue,
-    canBeFalse: whenFalse.reachable,
+    canBeFalse: falsePaths.length > 0,
     whenTrue: right.whenTrue,
-    whenFalse: whenFalse.narrowings,
+    whenFalse: joinNarrowings(falsePaths.map((path) => path.narrowings)),
   };
 }
 
@@ -507,32 +472,29 @@ function combineOr(
   left: ConditionResult,
   right: ConditionResult
 ): ConditionResult {
-  const whenTrue = joinedOutcome([
+  const truePaths = [
     { reachable: left.canBeTrue, narrowings: left.whenTrue },
     {
       reachable: left.canBeFalse && right.canBeTrue,
       narrowings: right.whenTrue,
     },
-  ]);
+  ].filter((path) => path.reachable);
   return {
-    canBeTrue: whenTrue.reachable,
+    canBeTrue: truePaths.length > 0,
     canBeFalse: left.canBeFalse && right.canBeFalse,
-    whenTrue: whenTrue.narrowings,
+    whenTrue: joinNarrowings(truePaths.map((path) => path.narrowings)),
     whenFalse: right.whenFalse,
   };
 }
 
-function filterNull(
+// Shared skeleton: `decide` returns the variant to keep, a replacement, or undefined to drop it.
+function narrowVariants(
   value: Value,
-  wantNull: boolean,
-  ctx: SemanticContext
+  ctx: SemanticContext,
+  decide: (variant: SchemaResolution) => SchemaResolution | undefined
 ): Narrowing {
   const root = schemaRootForValue(value);
-  const kept: {
-    schema: OpelSchema;
-    root: OpelSchema;
-    references?: string[];
-  }[] = [];
+  const kept: SchemaResolution[] = [];
   for (const variant of resolveSchemaVariants(
     value.schema,
     root,
@@ -545,44 +507,9 @@ function filterNull(
     if (variant.schema === false) {
       continue;
     }
-    const types = getSchemaTypes(variant.schema, variant.root, ctx.runtime);
-    if (types.length === 0) {
-      kept.push(variant);
-      continue;
-    }
-    const hasNull = types.includes('null');
-    const nonNullTypes = types.filter((type) => type !== 'null');
-    if (wantNull) {
-      if (hasNull) {
-        kept.push({
-          schema: { type: 'null' },
-          root: variant.root,
-          references: variant.references,
-        });
-      }
-    } else if (nonNullTypes.length > 0) {
-      if (!hasNull) {
-        kept.push(variant);
-      } else {
-        const object = schemaObject(variant.schema);
-        if (!object) {
-          kept.push(variant);
-          continue;
-        }
-        const narrowed = { ...object };
-        delete narrowed.nullable;
-        if (object.type !== undefined) {
-          narrowed.type = nonNullTypes as OpelPrimitive[];
-        }
-        if (Array.isArray(object.enum)) {
-          narrowed.enum = object.enum.filter((item) => item !== null);
-        }
-        kept.push({
-          schema: narrowed as OpelSchema,
-          root: variant.root,
-          references: variant.references,
-        });
-      }
+    const decided = decide(variant);
+    if (decided) {
+      kept.push(decided);
     }
   }
   const schema =
@@ -594,6 +521,53 @@ function filterNull(
           kept.map((variant) => variant.references)
         );
   return { schema, root: kept[0]?.root ?? root, possible: schema !== false };
+}
+
+function filterNull(
+  value: Value,
+  wantNull: boolean,
+  ctx: SemanticContext
+): Narrowing {
+  return narrowVariants(value, ctx, (variant) => {
+    const types = getSchemaTypes(variant.schema, variant.root, ctx.runtime);
+    if (types.length === 0) {
+      return variant;
+    }
+    const hasNull = types.includes('null');
+    if (wantNull) {
+      return hasNull
+        ? {
+            schema: { type: 'null' },
+            root: variant.root,
+            references: variant.references,
+          }
+        : undefined;
+    }
+    const nonNullTypes = types.filter((type) => type !== 'null');
+    if (nonNullTypes.length === 0) {
+      return undefined;
+    }
+    if (!hasNull) {
+      return variant;
+    }
+    const object = schemaObject(variant.schema);
+    if (!object) {
+      return variant;
+    }
+    const narrowed = { ...object };
+    delete narrowed.nullable;
+    if (object.type !== undefined) {
+      narrowed.type = nonNullTypes as OpelPrimitive[];
+    }
+    if (Array.isArray(object.enum)) {
+      narrowed.enum = object.enum.filter((item) => item !== null);
+    }
+    return {
+      schema: narrowed as OpelSchema,
+      root: variant.root,
+      references: variant.references,
+    };
+  });
 }
 
 // OPEL compares parsed BigDecimals with scale-sensitive equals.
@@ -645,6 +619,13 @@ function scalarComparison(
   return literalEqual(candidate, other);
 }
 
+function schemaScalarValues(object: Record<string, unknown>): unknown[] | null {
+  if (object.const !== undefined) {
+    return [object.const];
+  }
+  return Array.isArray(object.enum) ? object.enum : null;
+}
+
 function propertyComparisonPossibilities(
   schema: OpelSchema,
   root: OpelSchema,
@@ -663,12 +644,7 @@ function propertyComparisonPossibilities(
       unknown = true;
       continue;
     }
-    const values =
-      object.const !== undefined
-        ? [object.const]
-        : Array.isArray(object.enum)
-          ? object.enum
-          : null;
+    const values = schemaScalarValues(object);
     if (!values) {
       unknown = true;
       continue;
@@ -699,28 +675,10 @@ function filterDiscriminator(
   wantEqual: boolean,
   ctx: SemanticContext
 ): Narrowing {
-  const root = schemaRootForValue(value);
-  const kept: {
-    schema: OpelSchema;
-    root: OpelSchema;
-    references?: string[];
-  }[] = [];
-  for (const variant of resolveSchemaVariants(
-    value.schema,
-    root,
-    ctx.runtime
-  )) {
-    if (variant.schema === true) {
-      kept.push(variant);
-      continue;
-    }
-    if (variant.schema === false) {
-      continue;
-    }
+  return narrowVariants(value, ctx, (variant) => {
     const object = schemaObject(variant.schema);
     if (!object) {
-      kept.push(variant);
-      continue;
+      return variant;
     }
     const properties = isRecord(object.properties) ? object.properties : {};
     const hasProperty = Object.prototype.hasOwnProperty.call(
@@ -761,19 +719,9 @@ function filterDiscriminator(
     if (!required) {
       possibilities = { ...possibilities, unequal: true };
     }
-    if (wantEqual ? possibilities.equal : possibilities.unequal) {
-      kept.push(variant);
-    }
-  }
-  const schema =
-    kept.length === 0
-      ? false
-      : createUnionSchema(
-          kept.map((variant) => variant.schema),
-          kept.map((variant) => variant.root),
-          kept.map((variant) => variant.references)
-        );
-  return { schema, root: kept[0]?.root ?? root, possible: schema !== false };
+    const possible = wantEqual ? possibilities.equal : possibilities.unequal;
+    return possible ? variant : undefined;
+  });
 }
 
 function narrowingsForValue(
@@ -781,7 +729,7 @@ function narrowingsForValue(
   value: Value,
   narrowing: Narrowing
 ): PathNarrowings {
-  const narrowings = copyNarrowings(environmentNarrowings(env));
+  const narrowings = narrowingsInScope(env);
   if (value.path && narrowing.possible) {
     narrowings.set(stablePathKey(value.path), {
       schema: narrowing.schema,
@@ -805,6 +753,24 @@ function operandComparedWithNull(left: Value, right: Value): Value | null {
   return null;
 }
 
+// Pick the narrowing for each outcome by `equality` and build the condition.
+function narrowedCondition(
+  env: Environment,
+  value: Value,
+  equality: boolean,
+  equalNarrowing: Narrowing,
+  unequalNarrowing: Narrowing
+): ConditionResult {
+  const trueNarrowing = equality ? equalNarrowing : unequalNarrowing;
+  const falseNarrowing = equality ? unequalNarrowing : equalNarrowing;
+  return {
+    canBeTrue: trueNarrowing.possible,
+    canBeFalse: falseNarrowing.possible,
+    whenTrue: narrowingsForValue(env, value, trueNarrowing),
+    whenFalse: narrowingsForValue(env, value, falseNarrowing),
+  };
+}
+
 function comparisonCondition(
   operator: string,
   left: Value,
@@ -812,57 +778,37 @@ function comparisonCondition(
   env: Environment,
   ctx: SemanticContext
 ): ConditionResult {
-  const base = copyNarrowings(environmentNarrowings(env));
+  const base = narrowingsInScope(env);
   const equality = operator === NODE.EqualityOp;
   const checkedValue = operandComparedWithNull(left, right);
   if (checkedValue) {
-    const nullBranch = filterNull(checkedValue, true, ctx);
-    const nonNullBranch = filterNull(checkedValue, false, ctx);
-    const trueNarrowing = equality ? nullBranch : nonNullBranch;
-    const falseNarrowing = equality ? nonNullBranch : nullBranch;
-    return {
-      canBeTrue: trueNarrowing.possible,
-      canBeFalse: falseNarrowing.possible,
-      whenTrue: narrowingsForValue(env, checkedValue, trueNarrowing),
-      whenFalse: narrowingsForValue(env, checkedValue, falseNarrowing),
-    };
+    return narrowedCondition(
+      env,
+      checkedValue,
+      equality,
+      filterNull(checkedValue, true, ctx),
+      filterNull(checkedValue, false, ctx)
+    );
   }
 
-  const pathValue = left.pathParent ? left : right.pathParent ? right : null;
-  const candidateValue = pathValue === left ? right : left;
-  const candidate = candidateValue.literal;
+  const pathValue = left.pathParent ? left : right;
+  const parent = pathValue.pathParent;
+  const candidate = (pathValue === left ? right : left).literal;
   // Numeric schema values lose their source scale, so they cannot narrow safely.
   if (
-    pathValue &&
-    pathValue.pathParent &&
+    parent &&
     (typeof candidate === 'string' || typeof candidate === 'boolean')
   ) {
-    const parent = pathValue.pathParent;
     const segments = pathValue.path?.segments ?? [];
     const property = segments[segments.length - 1];
     if (property !== undefined) {
-      const equalBranch = filterDiscriminator(
+      return narrowedCondition(
+        env,
         parent,
-        property,
-        candidate,
-        true,
-        ctx
+        equality,
+        filterDiscriminator(parent, property, candidate, true, ctx),
+        filterDiscriminator(parent, property, candidate, false, ctx)
       );
-      const unequalBranch = filterDiscriminator(
-        parent,
-        property,
-        candidate,
-        false,
-        ctx
-      );
-      const trueNarrowing = equality ? equalBranch : unequalBranch;
-      const falseNarrowing = equality ? unequalBranch : equalBranch;
-      return {
-        canBeTrue: trueNarrowing.possible,
-        canBeFalse: falseNarrowing.possible,
-        whenTrue: narrowingsForValue(env, parent, trueNarrowing),
-        whenFalse: narrowingsForValue(env, parent, falseNarrowing),
-      };
     }
   }
 

@@ -21,6 +21,8 @@ import {
   schemaObject,
   schemaRootFor,
   createUnionSchema,
+  createMapLiteralSchema,
+  schemaForAdditionalProperty,
   combineSchemaValues,
   resolveSchemaVariants,
   getSchemaTypes,
@@ -763,9 +765,13 @@ function analyzeMap(
       required.push(name);
     }
   }
-  const additionalValues = remaining
+  const additionalEntries = remaining
     .filter((entry) => entry.names === undefined)
-    .map((entry) => entry.value);
+    .map(({ possibleNames, value }) => ({
+      possibleNames,
+      schema: value.schema,
+      root: schemaRootForValue(value),
+    }));
   const literal: Record<string, unknown> = Object.create(null);
   let hasLiteral = true;
   for (const entry of remaining) {
@@ -778,18 +784,7 @@ function analyzeMap(
     }
   }
   return {
-    schema: {
-      type: 'object',
-      properties,
-      required,
-      additionalProperties:
-        additionalValues.length === 0
-          ? false
-          : createUnionSchema(
-              additionalValues.map((value) => value.schema),
-              additionalValues.map(schemaRootForValue)
-            ),
-    },
+    schema: createMapLiteralSchema(properties, required, additionalEntries),
     literal: hasLiteral ? literal : undefined,
   };
 }
@@ -837,6 +832,7 @@ function analyzeOperators(
         getSchemaTypes(value.schema, schemaRootForValue(value), ctx.runtime)
       );
       if (operandTypes.some((types) => types.length === 0)) {
+        // A host's implicit conversions can make mixed addition concatenate.
         return { schema: true };
       }
       if (operandTypes.every((types) => types.includes('string'))) {
@@ -1792,31 +1788,21 @@ function resolvePropertyAccess(
       );
       continue;
     }
-    if (object.additionalProperties === false) {
+    const additionalSchema = schemaForAdditionalProperty(object, name);
+    if (additionalSchema === false) {
       unsupported++;
-    } else {
-      const hasPropertyRules =
-        isRecord(object.properties) ||
-        isRecord(object.patternProperties) ||
-        object.additionalProperties !== undefined;
-      if (!hasPropertyRules) {
-        supports.push({ schema: true, root: resolution.root });
-      } else {
-        if (object.additionalProperties === undefined) {
-          unsupported++;
-        } else {
-          hasExplicitSupport = true;
-        }
-        const schema =
-          object.additionalProperties && object.additionalProperties !== true
-            ? (object.additionalProperties as OpelSchema)
-            : true;
-        supports.push({
-          schema,
-          root: schemaRootFor(schema, resolution.root),
-        });
-      }
+      continue;
     }
+    if (additionalSchema !== undefined) {
+      hasExplicitSupport = true;
+    } else if (
+      isRecord(object.properties) ||
+      isRecord(object.patternProperties)
+    ) {
+      unsupported++;
+    }
+    const schema = additionalSchema ?? true;
+    supports.push({ schema, root: schemaRootFor(schema, resolution.root) });
   }
   if (hasUnknownVariant) {
     return { schema: true };

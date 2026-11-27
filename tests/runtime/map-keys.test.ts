@@ -204,6 +204,35 @@ describe('runtime-compatible map keys', () => {
     ).toEqual([]);
   });
 
+  it.each([
+    ['map.missing', 'missing'],
+    ["map['1']", '1'],
+  ])('rejects %s on a map with only a numeric key', (access, name) => {
+    expect(lint(`val map = {1: 42}; ${access}`)).toEqual([
+      expect.objectContaining({
+        severity: 'error',
+        message: expect.stringContaining(`Property "${name}" is not defined`),
+      }),
+    ]);
+  });
+
+  it('only uses entries that can match the requested string key', () => {
+    const source = 'val map = {1: 42, mixedKey: runtimeValue};';
+
+    expect(lint(`${source} acceptInteger(map.id)`, { runtime })).toEqual([
+      expect.objectContaining({
+        severity: 'error',
+        message: expect.stringContaining("argument of type 'string'"),
+      }),
+    ]);
+    expect(lint(`${source} map.missing`, { runtime })).toEqual([
+      expect.objectContaining({
+        severity: 'error',
+        message: expect.stringContaining('Property "missing" is not defined'),
+      }),
+    ]);
+  });
+
   it('reports errors in both the computed key and its value', () => {
     expect(lint('{missingKey(): missingValue}')).toEqual([
       expect.objectContaining({
@@ -231,7 +260,7 @@ describe('runtime-compatible map keys', () => {
     ]);
   });
 
-  it.each(['runtimeKey', 'makeKey()'])(
+  it.each(['1', 'runtimeKey', 'makeKey()'])(
     'checks map values when the key is %s',
     (key) => {
       expect(lint(`acceptIntegerMap({${key}: 1})`, { runtime })).toEqual([]);
@@ -448,7 +477,10 @@ describe('runtime-compatible map keys', () => {
     ]);
   });
 
-  it('checks the id type even when the key could name another field', () => {
+  it('checks the optional id type only for keys that could be id', () => {
+    expect(lint('acceptOptionalId({1: runtimeValue})', { runtime })).toEqual(
+      []
+    );
     expect(
       lint('acceptOptionalId({possibleIdKey: runtimeValue})', { runtime })
     ).toEqual([

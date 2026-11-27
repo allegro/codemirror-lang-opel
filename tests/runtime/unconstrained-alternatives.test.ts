@@ -194,6 +194,15 @@ describe('unconstrained inference alternatives', () => {
     }
   );
 
+  it.each(['selector + 1', '1 + selector'])(
+    'allows a string result with an unknown operand: %s',
+    (expression) => {
+      expect(
+        lint(`acceptString(${expression})`, { runtime: geometryRuntime })
+      ).toEqual([]);
+    }
+  );
+
   it.each([
     ['the unknown alternative is first', true],
     ['the unknown alternative is last', false],

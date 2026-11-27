@@ -7,6 +7,15 @@ const SCHEMA_BRANCH_ROOTS = new WeakMap<object, OpelSchema[]>();
 // allOf sibling constraints do not participate in branch-specific property checks.
 const OWN_SCHEMA_CONSTRAINTS = new WeakSet<object>();
 
+type AdditionalMapEntry = {
+  possibleNames: ReadonlySet<string> | undefined;
+  schema: OpelSchema;
+  root: OpelSchema;
+};
+
+// Map value checks include all keys, while property names can only match strings.
+const MAP_EXTRA_ENTRIES = new WeakMap<object, readonly AdditionalMapEntry[]>();
+
 type SchemaResolution = {
   schema: OpelSchema;
   root: OpelSchema;
@@ -74,6 +83,50 @@ export function createUnionSchema(
   SCHEMA_BRANCH_ROOTS.set(union, flattenedRoots);
   rememberSchemaRoot(union, flattenedRoots[0]);
   return union;
+}
+
+function mapEntryValueSchema(
+  entries: readonly AdditionalMapEntry[]
+): OpelSchema {
+  return entries.length === 0
+    ? false
+    : createUnionSchema(
+        entries.map((entry) => entry.schema),
+        entries.map((entry) => entry.root)
+      );
+}
+
+export function createMapLiteralSchema(
+  properties: Record<string, OpelSchema>,
+  required: string[],
+  additionalEntries: AdditionalMapEntry[]
+): OpelSchema {
+  const schema = {
+    type: 'object' as const,
+    properties,
+    required,
+    additionalProperties: mapEntryValueSchema(additionalEntries),
+  };
+  if (additionalEntries.some((entry) => entry.possibleNames !== undefined)) {
+    MAP_EXTRA_ENTRIES.set(schema, additionalEntries);
+  }
+  return schema;
+}
+
+export function schemaForAdditionalProperty(
+  object: Record<string, unknown>,
+  name: string
+): OpelSchema | undefined {
+  const entries = MAP_EXTRA_ENTRIES.get(object);
+  if (!entries) {
+    return object.additionalProperties as OpelSchema | undefined;
+  }
+  return mapEntryValueSchema(
+    entries.filter(
+      (entry) =>
+        entry.possibleNames === undefined || entry.possibleNames.has(name)
+    )
+  );
 }
 
 function decodePointerSegment(value: string): string {

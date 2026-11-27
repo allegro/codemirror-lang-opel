@@ -9,6 +9,7 @@ import {
   patternMatches,
   patternsMayOverlap,
   resolveSchemaVariants,
+  schemaForAdditionalProperty,
   schemaAllowsType,
   schemaObject,
   schemaRootFor,
@@ -340,12 +341,18 @@ function isObjectSchemaCompatible(
       targetObject.properties
     )) {
       if (
-        !Object.prototype.hasOwnProperty.call(sourceProperties, targetName) &&
-        matchingPatternProperties(sourceObject, targetName).length === 0 &&
+        Object.prototype.hasOwnProperty.call(sourceProperties, targetName) ||
+        matchingPatternProperties(sourceObject, targetName).length > 0
+      ) {
+        continue;
+      }
+      const extra = schemaForAdditionalProperty(sourceObject, targetName);
+      if (
+        extra &&
         !isSchemaCompatible(
-          sourceObject.additionalProperties as OpelSchema,
+          extra,
           targetProperty as OpelSchema,
-          sourceRoot,
+          schemaRootFor(extra, sourceRoot),
           targetRoot,
           runtime,
           seen

@@ -108,6 +108,78 @@ export const UnionMemberWarning: StoryObj = {
   }),
 };
 
+const geometryRuntime: OpelRuntime = {
+  globals: {
+    selector: true,
+    axisScale: { type: 'string' },
+  },
+  functions: {
+    sketch: {
+      signatures: [
+        {
+          parameters: [{ name: 'preset', schema: { type: 'integer', enum: [1, 2] } }],
+          returns: { $ref: 'Shape' },
+        },
+        {
+          parameters: [{ name: 'description', schema: { type: 'string' } }],
+          returns: true,
+        },
+      ],
+    },
+  },
+  schemas: {
+    Shape: {
+      oneOf: [
+        {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            kind: { type: 'string', const: 'circle' },
+            radius: { type: 'number' },
+          },
+          required: ['id', 'kind', 'radius'],
+          additionalProperties: false,
+        },
+        {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            kind: { type: 'string', const: 'square' },
+            side: { type: 'number' },
+          },
+          required: ['id', 'kind', 'side'],
+          additionalProperties: false,
+        },
+        { type: 'null' },
+      ],
+    },
+  },
+};
+
+export const UnconstrainedCallResult: StoryObj = {
+  name: 'Unconstrained overload result',
+  ...createEditorStory({
+    doc: 'sketch(selector).missing',
+    runtime: geometryRuntime,
+  }),
+};
+
+export const RuntimeGlobalShadowing: StoryObj = {
+  name: 'Local shadows a runtime global',
+  ...createEditorStory({
+    doc: 'val axisScale = 1; axisScale - axisScale',
+    runtime: geometryRuntime,
+  }),
+};
+
+export const RuntimeFunctionRedeclaration: StoryObj = {
+  name: 'Local redeclares a runtime function',
+  ...createEditorStory({
+    doc: 'val sketch = 1; sketch',
+    runtime: geometryRuntime,
+  }),
+};
+
 const complexSettingsSchema: OpelSchema = {
   type: 'object',
   properties: {

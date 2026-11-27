@@ -317,7 +317,7 @@ describe('methods on union receivers', () => {
       });
       expect(
         diagnostics.filter((diagnostic) =>
-          /arity|Type mismatch|ambiguous|some receiver variants/.test(
+          /arity|Type mismatch|Multiple function signatures could match this call|some receiver variants/.test(
             diagnostic.message
           )
         )
@@ -361,7 +361,9 @@ describe('methods on union receivers', () => {
     expect(diagnostics[0]).toEqual(
       expect.objectContaining({
         severity: 'warning',
-        message: expect.stringContaining('Call is ambiguous'),
+        message: expect.stringContaining(
+          'Multiple function signatures could match this call'
+        ),
       })
     );
   });

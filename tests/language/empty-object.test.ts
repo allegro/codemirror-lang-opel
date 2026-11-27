@@ -7,7 +7,7 @@ describe('empty object syntax', () => {
   });
 
   it('parses non-empty objects', () => {
-    expect(hasParseError('{a: 1, b: 2}')).toBe(false);
+    expect(hasParseError("{'a': 1, 'b': 2}")).toBe(false);
   });
 
   it('does not parse a bare {} (runtime-compatible)', () => {
@@ -31,7 +31,7 @@ describe('empty object syntax', () => {
   });
 
   it('does not flag non-empty objects', () => {
-    const diagnostics = lint('{a: 1}');
+    const diagnostics = lint("{'a': 1}");
     expect(
       diagnostics.filter((d) => d.message.includes('Empty object'))
     ).toHaveLength(0);

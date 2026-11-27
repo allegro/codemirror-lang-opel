@@ -7,6 +7,15 @@ const SCHEMA_BRANCH_ROOTS = new WeakMap<object, OpelSchema[]>();
 // allOf sibling constraints do not participate in branch-specific property checks.
 const OWN_SCHEMA_CONSTRAINTS = new WeakSet<object>();
 
+type AdditionalMapEntry = {
+  possibleNames: ReadonlySet<string> | undefined;
+  schema: OpelSchema;
+  root: OpelSchema;
+};
+
+// Map value checks include all keys, while property names can only match strings.
+const MAP_EXTRA_ENTRIES = new WeakMap<object, readonly AdditionalMapEntry[]>();
+
 type SchemaResolution = {
   schema: OpelSchema;
   root: OpelSchema;
@@ -36,8 +45,7 @@ export function schemaRootFor(
   return isRecord(schema) ? (SCHEMA_ROOTS.get(schema) ?? fallback) : fallback;
 }
 
-// Flatten oneOf branches; standalone true (unknown) inputs add no alternatives.
-// Each retained branch keeps its own document root.
+// Flatten oneOf branches while retaining unknown alternatives and branch roots.
 export function createUnionSchema(
   schemas: OpelSchema[],
   roots: OpelSchema[] = []
@@ -50,19 +58,22 @@ export function createUnionSchema(
     const branchRoots = object ? SCHEMA_BRANCH_ROOTS.get(object) : undefined;
     if (object && Array.isArray(object.oneOf)) {
       for (const [branchIndex, branch] of object.oneOf.entries()) {
+        if (branch === false) {
+          continue;
+        }
         flattened.push(branch as OpelSchema);
         flattenedRoots.push(
           branchRoots?.[branchIndex] ??
             schemaRootFor(branch as OpelSchema, fallbackRoot)
         );
       }
-    } else if (schema !== true) {
+    } else if (schema !== false) {
       flattened.push(schema);
       flattenedRoots.push(schemaRootFor(schema, fallbackRoot));
     }
   }
   if (flattened.length === 0) {
-    return true;
+    return schemas.length === 0;
   }
   if (flattened.length === 1) {
     rememberSchemaRoot(flattened[0], flattenedRoots[0]);
@@ -72,6 +83,50 @@ export function createUnionSchema(
   SCHEMA_BRANCH_ROOTS.set(union, flattenedRoots);
   rememberSchemaRoot(union, flattenedRoots[0]);
   return union;
+}
+
+function mapEntryValueSchema(
+  entries: readonly AdditionalMapEntry[]
+): OpelSchema {
+  return entries.length === 0
+    ? false
+    : createUnionSchema(
+        entries.map((entry) => entry.schema),
+        entries.map((entry) => entry.root)
+      );
+}
+
+export function createMapLiteralSchema(
+  properties: Record<string, OpelSchema>,
+  required: string[],
+  additionalEntries: AdditionalMapEntry[]
+): OpelSchema {
+  const schema = {
+    type: 'object' as const,
+    properties,
+    required,
+    additionalProperties: mapEntryValueSchema(additionalEntries),
+  };
+  if (additionalEntries.some((entry) => entry.possibleNames !== undefined)) {
+    MAP_EXTRA_ENTRIES.set(schema, additionalEntries);
+  }
+  return schema;
+}
+
+export function schemaForAdditionalProperty(
+  object: Record<string, unknown>,
+  name: string
+): OpelSchema | undefined {
+  const entries = MAP_EXTRA_ENTRIES.get(object);
+  if (!entries) {
+    return object.additionalProperties as OpelSchema | undefined;
+  }
+  return mapEntryValueSchema(
+    entries.filter(
+      (entry) =>
+        entry.possibleNames === undefined || entry.possibleNames.has(name)
+    )
+  );
 }
 
 function decodePointerSegment(value: string): string {
@@ -475,29 +530,33 @@ export function resolveSchemaVariants(
   nextSeen.add(resolved.schema);
   if (Array.isArray(object.oneOf)) {
     const branchRoots = SCHEMA_BRANCH_ROOTS.get(object);
+    const alternatives = object.oneOf.flatMap((child, index) =>
+      resolveSchemaVariants(
+        child as OpelSchema,
+        branchRoots?.[index] ?? resolved.root,
+        runtime,
+        nextSeen
+      )
+    );
+    const possible = alternatives.filter((variant) => variant.schema !== false);
     return withSchemaReferences(
-      object.oneOf.flatMap((child, index) =>
-        resolveSchemaVariants(
-          child as OpelSchema,
-          branchRoots?.[index] ?? resolved.root,
-          runtime,
-          nextSeen
-        )
-      ),
+      possible.length > 0 ? possible : [{ schema: false, root: resolved.root }],
       resolved.references
     );
   }
   if (Array.isArray(object.anyOf)) {
     const branchRoots = SCHEMA_BRANCH_ROOTS.get(object);
+    const alternatives = object.anyOf.flatMap((child, index) =>
+      resolveSchemaVariants(
+        child as OpelSchema,
+        branchRoots?.[index] ?? resolved.root,
+        runtime,
+        nextSeen
+      )
+    );
+    const possible = alternatives.filter((variant) => variant.schema !== false);
     return withSchemaReferences(
-      object.anyOf.flatMap((child, index) =>
-        resolveSchemaVariants(
-          child as OpelSchema,
-          branchRoots?.[index] ?? resolved.root,
-          runtime,
-          nextSeen
-        )
-      ),
+      possible.length > 0 ? possible : [{ schema: false, root: resolved.root }],
       resolved.references
     );
   }
@@ -552,7 +611,11 @@ export function getSchemaTypes(
     return ['never'];
   }
   const types = new Set<string>();
-  for (const resolution of resolveSchemaVariants(schema, root, runtime)) {
+  const variants = resolveSchemaVariants(schema, root, runtime);
+  if (variants.some((resolution) => resolution.schema === true)) {
+    return [];
+  }
+  for (const resolution of variants) {
     const variant = resolution.schema;
     if (variant === true) {
       continue;

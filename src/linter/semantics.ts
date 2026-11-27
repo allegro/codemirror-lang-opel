@@ -791,6 +791,20 @@ function narrowingsForValue(
   return narrowings;
 }
 
+// Pick the operand compared against null; with `null == null`, prefer the side with a path.
+function operandComparedWithNull(left: Value, right: Value): Value | null {
+  if (left.literal === null && right.literal === null) {
+    return left.path ? left : right;
+  }
+  if (left.literal === null) {
+    return right;
+  }
+  if (right.literal === null) {
+    return left;
+  }
+  return null;
+}
+
 function comparisonCondition(
   operator: string,
   left: Value,
@@ -800,29 +814,17 @@ function comparisonCondition(
 ): ConditionResult {
   const base = copyNarrowings(environmentNarrowings(env));
   const equality = operator === NODE.EqualityOp;
-  const nullValue =
-    left.literal === null && right.literal === null
-      ? left.path
-        ? left
-        : right.path
-          ? right
-          : right
-      : left.literal === null
-        ? right
-        : right.literal === null
-          ? left
-          : null;
-  if (nullValue) {
-    const isEquality = equality;
-    const nullBranch = filterNull(nullValue, true, ctx);
-    const nonNullBranch = filterNull(nullValue, false, ctx);
-    const trueNarrowing = isEquality ? nullBranch : nonNullBranch;
-    const falseNarrowing = isEquality ? nonNullBranch : nullBranch;
+  const checkedValue = operandComparedWithNull(left, right);
+  if (checkedValue) {
+    const nullBranch = filterNull(checkedValue, true, ctx);
+    const nonNullBranch = filterNull(checkedValue, false, ctx);
+    const trueNarrowing = equality ? nullBranch : nonNullBranch;
+    const falseNarrowing = equality ? nonNullBranch : nullBranch;
     return {
       canBeTrue: trueNarrowing.possible,
       canBeFalse: falseNarrowing.possible,
-      whenTrue: narrowingsForValue(env, nullValue, trueNarrowing),
-      whenFalse: narrowingsForValue(env, nullValue, falseNarrowing),
+      whenTrue: narrowingsForValue(env, checkedValue, trueNarrowing),
+      whenFalse: narrowingsForValue(env, checkedValue, falseNarrowing),
     };
   }
 

@@ -129,29 +129,34 @@ const geometryRuntime: OpelRuntime = {
   },
   schemas: {
     Shape: {
-      oneOf: [
-        {
-          type: 'object',
-          properties: {
-            id: { type: 'string' },
-            kind: { type: 'string', const: 'circle' },
-            radius: { type: 'number' },
-          },
-          required: ['id', 'kind', 'radius'],
-          additionalProperties: false,
-        },
-        {
-          type: 'object',
-          properties: {
-            id: { type: 'string' },
-            kind: { type: 'string', const: 'square' },
-            side: { type: 'number' },
-          },
-          required: ['id', 'kind', 'side'],
-          additionalProperties: false,
-        },
-        { type: 'null' },
-      ],
+      oneOf: [{ $ref: 'Circle' }, { $ref: 'Square' }, { type: 'null' }],
+    },
+    Circle: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        kind: { type: 'string', const: 'circle' },
+        radius: { type: 'number' },
+      },
+      required: ['id', 'kind', 'radius'],
+      additionalProperties: false,
+    },
+    Square: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        kind: { type: 'string', const: 'square' },
+        side: { type: 'number' },
+      },
+      required: ['id', 'kind', 'side'],
+      additionalProperties: false,
+    },
+  },
+  methods: {
+    Circle: {
+      describe: {
+        signatures: [{ parameters: [], returns: { type: 'string' } }],
+      },
     },
   },
 };
@@ -176,6 +181,61 @@ export const RuntimeFunctionRedeclaration: StoryObj = {
   name: 'Local redeclares a runtime function',
   ...createEditorStory({
     doc: 'val sketch = 1; sketch',
+    runtime: geometryRuntime,
+  }),
+};
+
+export const NullableShapeGuard: StoryObj = {
+  name: 'Guard a nullable runtime result',
+  ...createEditorStory({
+    doc: `val item = sketch(1);
+if (item != null) item.id else null`,
+    runtime: geometryRuntime,
+  }),
+};
+
+export const ShortCircuitShapeGuard: StoryObj = {
+  name: 'Narrow through a short-circuit guard',
+  ...createEditorStory({
+    doc: `val item = sketch(1);
+if (item != null && item.kind == 'circle') item.radius else null`,
+    runtime: geometryRuntime,
+  }),
+};
+
+export const UnguardedNullableShape: StoryObj = {
+  name: 'Warn on unguarded nullable access',
+  ...createEditorStory({
+    doc: `val item = sketch(1);
+item.id`,
+    runtime: geometryRuntime,
+  }),
+};
+
+export const DiscriminatedShapeMembers: StoryObj = {
+  name: 'Narrow union members by kind',
+  ...createEditorStory({
+    doc: `val item = sketch(1);
+if (item == null)
+  null
+else if (item.kind == 'circle')
+  item.radius
+else
+  item.side`,
+    runtime: geometryRuntime,
+  }),
+};
+
+export const DiscriminatedShapeMethod: StoryObj = {
+  name: 'Call a method on the matching variant',
+  ...createEditorStory({
+    doc: `val item = sketch(1);
+if (item == null)
+  null
+else if (item.kind == 'circle')
+  item.describe()
+else
+  item.side`,
     runtime: geometryRuntime,
   }),
 };

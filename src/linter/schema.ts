@@ -4,10 +4,14 @@ import type { OpelRuntime, OpelSchema } from '../types';
 // properties and union branches retain the roots needed by local references.
 const SCHEMA_ROOTS = new WeakMap<object, OpelSchema>();
 const SCHEMA_BRANCH_ROOTS = new WeakMap<object, OpelSchema[]>();
+const SCHEMA_BRANCH_REFERENCES = new WeakMap<
+  object,
+  (string[] | undefined)[]
+>();
 // allOf sibling constraints do not participate in branch-specific property checks.
 const OWN_SCHEMA_CONSTRAINTS = new WeakSet<object>();
 
-type SchemaResolution = {
+export type SchemaResolution = {
   schema: OpelSchema;
   root: OpelSchema;
   references?: string[];
@@ -36,17 +40,24 @@ export function schemaRootFor(
   return isRecord(schema) ? (SCHEMA_ROOTS.get(schema) ?? fallback) : fallback;
 }
 
-// Flatten oneOf branches while retaining unknown alternatives and branch roots.
+// Flatten oneOf branches while keeping unknown alternatives and branch metadata.
+// Roots and references preserve each branch's schema resolution context.
 export function createUnionSchema(
   schemas: OpelSchema[],
-  roots: OpelSchema[] = []
+  roots: OpelSchema[] = [],
+  references: (string[] | undefined)[] = []
 ): OpelSchema {
   const flattened: OpelSchema[] = [];
   const flattenedRoots: OpelSchema[] = [];
+  const flattenedReferences: (string[] | undefined)[] = [];
   for (const [index, schema] of schemas.entries()) {
     const fallbackRoot = roots[index] ?? schema;
     const object = schemaObject(schema);
     const branchRoots = object ? SCHEMA_BRANCH_ROOTS.get(object) : undefined;
+    const inheritedReferences = references[index];
+    const branchReferences = object
+      ? SCHEMA_BRANCH_REFERENCES.get(object)
+      : undefined;
     if (object && Array.isArray(object.oneOf)) {
       for (const [branchIndex, branch] of object.oneOf.entries()) {
         if (branch === false) {
@@ -57,21 +68,37 @@ export function createUnionSchema(
           branchRoots?.[branchIndex] ??
             schemaRootFor(branch as OpelSchema, fallbackRoot)
         );
+        const referencesForBranch = [
+          ...(inheritedReferences ?? []),
+          ...(branchReferences?.[branchIndex] ?? []),
+        ];
+        flattenedReferences.push(
+          referencesForBranch.length > 0 ? referencesForBranch : undefined
+        );
       }
     } else if (schema !== false) {
       flattened.push(schema);
       flattenedRoots.push(schemaRootFor(schema, fallbackRoot));
+      flattenedReferences.push(inheritedReferences);
     }
   }
   if (flattened.length === 0) {
     return schemas.length === 0;
   }
   if (flattened.length === 1) {
+    if (flattenedReferences[0]?.length) {
+      const union = { oneOf: flattened };
+      SCHEMA_BRANCH_ROOTS.set(union, flattenedRoots);
+      SCHEMA_BRANCH_REFERENCES.set(union, flattenedReferences);
+      rememberSchemaRoot(union, flattenedRoots[0]);
+      return union;
+    }
     rememberSchemaRoot(flattened[0], flattenedRoots[0]);
     return flattened[0];
   }
   const union = { oneOf: flattened };
   SCHEMA_BRANCH_ROOTS.set(union, flattenedRoots);
+  SCHEMA_BRANCH_REFERENCES.set(union, flattenedReferences);
   rememberSchemaRoot(union, flattenedRoots[0]);
   return union;
 }
@@ -477,12 +504,16 @@ export function resolveSchemaVariants(
   nextSeen.add(resolved.schema);
   if (Array.isArray(object.oneOf)) {
     const branchRoots = SCHEMA_BRANCH_ROOTS.get(object);
+    const branchReferences = SCHEMA_BRANCH_REFERENCES.get(object);
     const alternatives = object.oneOf.flatMap((child, index) =>
-      resolveSchemaVariants(
-        child as OpelSchema,
-        branchRoots?.[index] ?? resolved.root,
-        runtime,
-        nextSeen
+      withSchemaReferences(
+        resolveSchemaVariants(
+          child as OpelSchema,
+          branchRoots?.[index] ?? resolved.root,
+          runtime,
+          nextSeen
+        ),
+        branchReferences?.[index]
       )
     );
     const possible = alternatives.filter((variant) => variant.schema !== false);
@@ -493,12 +524,16 @@ export function resolveSchemaVariants(
   }
   if (Array.isArray(object.anyOf)) {
     const branchRoots = SCHEMA_BRANCH_ROOTS.get(object);
+    const branchReferences = SCHEMA_BRANCH_REFERENCES.get(object);
     const alternatives = object.anyOf.flatMap((child, index) =>
-      resolveSchemaVariants(
-        child as OpelSchema,
-        branchRoots?.[index] ?? resolved.root,
-        runtime,
-        nextSeen
+      withSchemaReferences(
+        resolveSchemaVariants(
+          child as OpelSchema,
+          branchRoots?.[index] ?? resolved.root,
+          runtime,
+          nextSeen
+        ),
+        branchReferences?.[index]
       )
     );
     const possible = alternatives.filter((variant) => variant.schema !== false);
@@ -569,15 +604,17 @@ export function getSchemaTypes(
     }
     if (variant === false) {
       types.add('never');
-    } else if (variant.type) {
-      for (const type of Array.isArray(variant.type)
+      continue;
+    }
+    let hasKnownNonNullType = false;
+    if (variant.type) {
+      const declaredTypes = Array.isArray(variant.type)
         ? variant.type
-        : [variant.type]) {
+        : [variant.type];
+      for (const type of declaredTypes) {
         types.add(type as string);
       }
-      if (variant.nullable) {
-        types.add('null');
-      }
+      hasKnownNonNullType = declaredTypes.some((type) => type !== 'null');
     } else if (
       variant.properties ||
       variant.required ||
@@ -585,14 +622,21 @@ export function getSchemaTypes(
       variant.patternProperties
     ) {
       types.add('object');
+      hasKnownNonNullType = true;
     } else if (variant.items !== undefined) {
       types.add('array');
+      hasKnownNonNullType = true;
     } else if (variant.const !== undefined) {
       types.add(valueType(variant.const));
+      hasKnownNonNullType = variant.const !== null;
     } else if (variant.enum?.length) {
       for (const value of variant.enum) {
         types.add(valueType(value));
       }
+      hasKnownNonNullType = variant.enum.some((value) => value !== null);
+    }
+    if (variant.nullable && hasKnownNonNullType) {
+      types.add('null');
     }
   }
   return [...types];

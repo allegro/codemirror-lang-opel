@@ -29,8 +29,9 @@ import {
   matchingPatternProperties,
   literalEqual,
 } from './schema';
+import type { SchemaResolution } from './schema';
 
-const EXPRESSION_NODES = new Set([
+const EXPRESSION_NODES = new Set<string>([
   NODE.Expression,
   NODE.OrExpression,
   NODE.AndExpression,
@@ -44,9 +45,27 @@ const EXPRESSION_NODES = new Set([
   NODE.PostfixExpression,
 ]);
 
-// Unknown and impossible use schema true/false; undefined literal means unavailable.
-// Error marks an already-reported failure for dependent diagnostic suppression.
-type Value = SchemaValue & { callable?: OpelCallable; error?: boolean };
+// Unknown and impossible values use ANY_VALUE_SCHEMA and NO_VALUES_SCHEMA.
+// Undefined literals are unavailable; errors suppress dependent diagnostics.
+type StablePath = { root: string; segments: string[] };
+type Value = SchemaValue & {
+  callable?: OpelCallable;
+  error?: boolean;
+  path?: StablePath;
+  pathParent?: Value;
+  condition?: ConditionResult;
+  numericText?: string;
+};
+
+type NarrowedValue = { schema: OpelSchema; root: OpelSchema };
+// Schema refinements keyed by the stable paths they apply to.
+type PathNarrowings = Map<string, NarrowedValue>;
+type ConditionResult = {
+  canBeTrue: boolean;
+  canBeFalse: boolean;
+  whenTrue: PathNarrowings;
+  whenFalse: PathNarrowings;
+};
 
 type Binding = {
   name: string;
@@ -58,6 +77,41 @@ type Binding = {
 };
 
 type Environment = Map<string, Binding>;
+// Each analysis uses fresh environments, so branch refinements stay editor-local.
+const ENVIRONMENT_NARROWINGS = new WeakMap<Environment, PathNarrowings>();
+
+// Boolean schemas: true accepts any value; false accepts no values.
+const ANY_VALUE_SCHEMA = true;
+const NO_VALUES_SCHEMA = false;
+
+function createEnvironment(
+  bindings?: Iterable<readonly [string, Binding]>,
+  narrowings: PathNarrowings = new Map()
+): Environment {
+  const environment = new Map(bindings) as Environment;
+  ENVIRONMENT_NARROWINGS.set(environment, narrowings);
+  return environment;
+}
+
+function environmentNarrowings(env: Environment): PathNarrowings {
+  let narrowings = ENVIRONMENT_NARROWINGS.get(env);
+  if (!narrowings) {
+    narrowings = new Map();
+    ENVIRONMENT_NARROWINGS.set(env, narrowings);
+  }
+  return narrowings;
+}
+
+function cloneEnvironment(
+  env: Environment,
+  narrowings = environmentNarrowings(env)
+) {
+  return createEnvironment(env, narrowings);
+}
+
+function stablePathKey(path: StablePath): string {
+  return JSON.stringify([path.root, ...path.segments]);
+}
 
 // Derived values resolve local references against the document that introduced them.
 function schemaRootForValue(value: Value): OpelSchema {
@@ -101,7 +155,7 @@ export function analyzeRuntimeSemantics(
   };
   const body = tree.getChild(NODE.Body);
   if (body) {
-    analyzeScopeBody(body, new Map(), ctx);
+    analyzeScopeBody(body, createEnvironment(), ctx);
   }
   return ctx.diagnostics;
 }
@@ -120,11 +174,17 @@ function analyzeScopeBody(
         .getChild(NODE.VariableName)
         ?.getChild(NODE.Identifier);
       const expression = declaration.getChild(NODE.Expression);
-      const value = expression
+      let value = expression
         ? analyzeExpression(expression, env, ctx)
-        : { schema: true };
+        : { schema: ANY_VALUE_SCHEMA };
       if (nameNode) {
         const name = ctx.source.slice(nameNode.from, nameNode.to);
+        value = value.path
+          ? value
+          : {
+              ...value,
+              path: { root: `binding:${nameNode.from}`, segments: [] },
+            };
         const isRuntimeGlobal = Object.prototype.hasOwnProperty.call(
           ctx.runtime.globals ?? {},
           name
@@ -159,7 +219,7 @@ function analyzeScopeBody(
   const expression = body.getChild(NODE.Expression);
   const result = expression
     ? analyzeExpression(expression, env, ctx)
-    : { schema: true };
+    : { schema: ANY_VALUE_SCHEMA };
   addUnusedBindingDiagnostics(bindings, ctx);
   return result;
 }
@@ -202,7 +262,9 @@ function analyzeExpression(
         return analyzeExpression(postfixExpression, env, ctx);
       }
       const atom = node.getChild(NODE.Atom);
-      return atom ? analyzeExpression(atom, env, ctx) : { schema: true };
+      return atom
+        ? analyzeExpression(atom, env, ctx)
+        : { schema: ANY_VALUE_SCHEMA };
     }
     case NODE.Atom:
       return analyzeAtom(node, env, ctx);
@@ -214,6 +276,9 @@ function analyzeExpression(
         return {
           schema: { type: valueType(literal.value) as OpelPrimitive },
           literal: literal.value,
+          ...(node.name === NODE.Number
+            ? { numericText: ctx.source.slice(node.from, node.to) }
+            : {}),
         };
       }
       break;
@@ -221,13 +286,13 @@ function analyzeExpression(
     case NODE.BlockExpression: {
       const body = node.getChild(NODE.Body);
       return body
-        ? analyzeScopeBody(body, new Map(env), ctx)
-        : { schema: true };
+        ? analyzeScopeBody(body, cloneEnvironment(env), ctx)
+        : { schema: ANY_VALUE_SCHEMA };
     }
     case NODE.FunctionBody:
       return node.firstChild
         ? analyzeExpression(node.firstChild, env, ctx)
-        : { schema: true };
+        : { schema: ANY_VALUE_SCHEMA };
     case NODE.UnaryExpression:
       return analyzeUnary(node, env, ctx);
   }
@@ -241,59 +306,535 @@ function analyzeUnary(
 ): Value {
   const operand: Value = node.lastChild
     ? analyzeExpression(node.lastChild, env, ctx)
-    : { schema: true };
+    : { schema: ANY_VALUE_SCHEMA };
   const operator = node.firstChild?.name;
   if (operator !== NODE.Not && operator !== NODE.Minus) {
     return operand;
   }
-  let literal: unknown;
-  let schema: OpelSchema = true;
   if (operator === NODE.Not) {
-    schema = { type: 'boolean' };
-    if (typeof operand.literal === 'boolean') {
-      literal = !operand.literal;
-    }
-  } else if (typeof operand.literal === 'number') {
-    literal = -operand.literal;
-    schema = { type: valueType(literal) as OpelPrimitive };
-  } else {
-    const types = getSchemaTypes(
-      operand.schema,
-      schemaRootForValue(operand),
-      ctx.runtime
-    );
-    if (
-      types.length > 0 &&
-      types.every((type) => type === 'integer' || type === 'number')
-    ) {
-      schema = {
-        type: types.every((type) => type === 'integer') ? 'integer' : 'number',
-      };
-    }
+    return {
+      schema: { type: 'boolean' },
+      literal:
+        typeof operand.literal === 'boolean' ? !operand.literal : undefined,
+      error: operand.error,
+      ...(operand.condition
+        ? { condition: invertCondition(operand.condition) }
+        : {}),
+    };
   }
-  return { schema, literal, error: operand.error };
+  if (typeof operand.literal === 'number') {
+    const literal = -operand.literal;
+    return {
+      schema: { type: valueType(literal) as OpelPrimitive },
+      literal,
+      error: operand.error,
+      numericText: operand.numericText ? `-${operand.numericText}` : undefined,
+    };
+  }
+  let schema: OpelSchema = true;
+  const types = getSchemaTypes(
+    operand.schema,
+    schemaRootForValue(operand),
+    ctx.runtime
+  );
+  if (
+    types.length > 0 &&
+    types.every((type) => type === 'integer' || type === 'number')
+  ) {
+    schema = {
+      type: types.every((type) => type === 'integer') ? 'integer' : 'number',
+    };
+  }
+  return { schema, error: operand.error };
 }
 
-// Both branches are checked, without condition-based narrowing.
 function analyzeConditional(
   node: SyntaxNode,
   env: Environment,
   ctx: SemanticContext
 ): Value {
-  const branches = node.getChildren(NODE.Expression);
-  if (branches.length >= 3) {
-    analyzeExpression(branches[0], env, ctx);
-    const values = branches
-      .slice(1, 3)
-      .map((branch) => analyzeExpression(branch, env, ctx));
-    return {
-      schema: createUnionSchema(
-        values.map((value) => value.schema),
-        values.map(schemaRootForValue)
-      ),
-    };
+  // The expressions are condition, then-branch, and else-branch; while editing,
+  // the unfinished expression may not contain the else-branch yet.
+  const expressions = node.getChildren(NODE.Expression);
+  if (expressions.length >= 2) {
+    const condition = analyzeCondition(expressions[0], env, ctx);
+    const values: Value[] = [];
+    if (condition.canBeTrue) {
+      values.push(
+        analyzeExpression(
+          expressions[1],
+          cloneEnvironment(env, condition.whenTrue),
+          ctx
+        )
+      );
+    }
+    if (expressions[2] && condition.canBeFalse) {
+      values.push(
+        analyzeExpression(
+          expressions[2],
+          cloneEnvironment(env, condition.whenFalse),
+          ctx
+        )
+      );
+    }
+    return values.length === 0
+      ? { schema: NO_VALUES_SCHEMA }
+      : {
+          schema: createUnionSchema(
+            values.map((value) => value.schema),
+            values.map(schemaRootForValue)
+          ),
+        };
   }
   return analyzeOperators(node, env, ctx);
+}
+
+type Narrowing = { schema: OpelSchema; root: OpelSchema; possible: boolean };
+
+// A fresh copy of the narrowings in scope, safe to extend for one branch.
+function narrowingsInScope(env: Environment): PathNarrowings {
+  return new Map(environmentNarrowings(env));
+}
+
+// Keep only paths narrowed on every route, combining their possible schemas.
+function joinNarrowings(paths: PathNarrowings[]): PathNarrowings {
+  if (paths.length === 0) {
+    return new Map();
+  }
+  const joined = new Map<string, NarrowedValue>();
+  for (const [key, first] of paths[0]) {
+    const values = paths.slice(1).map((narrowings) => narrowings.get(key));
+    if (values.some((value) => value === undefined)) {
+      continue;
+    }
+    const present = [first, ...values] as NarrowedValue[];
+    joined.set(key, {
+      schema: createUnionSchema(
+        present.map((value) => value.schema),
+        present.map((value) => value.root)
+      ),
+      root: present[0].root,
+    });
+  }
+  return joined;
+}
+
+function conditionFromValue(value: Value, env: Environment): ConditionResult {
+  if (value.condition) {
+    return value.condition;
+  }
+  const narrowings = narrowingsInScope(env);
+  return {
+    canBeTrue: value.literal !== false,
+    canBeFalse: value.literal !== true,
+    whenTrue: narrowings,
+    whenFalse: narrowings,
+  };
+}
+
+function analyzeCondition(
+  node: SyntaxNode,
+  env: Environment,
+  ctx: SemanticContext
+): ConditionResult {
+  return conditionFromValue(analyzeExpression(node, env, ctx), env);
+}
+
+function invertCondition(condition: ConditionResult): ConditionResult {
+  return {
+    canBeTrue: condition.canBeFalse,
+    canBeFalse: condition.canBeTrue,
+    whenTrue: condition.whenFalse,
+    whenFalse: condition.whenTrue,
+  };
+}
+
+function combineAnd(
+  left: ConditionResult,
+  right: ConditionResult
+): ConditionResult {
+  const falsePaths = [
+    { reachable: left.canBeFalse, narrowings: left.whenFalse },
+    {
+      reachable: left.canBeTrue && right.canBeFalse,
+      narrowings: right.whenFalse,
+    },
+  ].filter((path) => path.reachable);
+  return {
+    canBeTrue: left.canBeTrue && right.canBeTrue,
+    canBeFalse: falsePaths.length > 0,
+    whenTrue: right.whenTrue,
+    whenFalse: joinNarrowings(falsePaths.map((path) => path.narrowings)),
+  };
+}
+
+function combineOr(
+  left: ConditionResult,
+  right: ConditionResult
+): ConditionResult {
+  const truePaths = [
+    { reachable: left.canBeTrue, narrowings: left.whenTrue },
+    {
+      reachable: left.canBeFalse && right.canBeTrue,
+      narrowings: right.whenTrue,
+    },
+  ].filter((path) => path.reachable);
+  return {
+    canBeTrue: truePaths.length > 0,
+    canBeFalse: left.canBeFalse && right.canBeFalse,
+    whenTrue: joinNarrowings(truePaths.map((path) => path.narrowings)),
+    whenFalse: right.whenFalse,
+  };
+}
+
+// Shared skeleton: `decide` returns the variant to keep, a replacement, or undefined to drop it.
+function narrowVariants(
+  value: Value,
+  ctx: SemanticContext,
+  decide: (variant: SchemaResolution) => SchemaResolution | undefined
+): Narrowing {
+  const root = schemaRootForValue(value);
+  const kept: SchemaResolution[] = [];
+  for (const variant of resolveSchemaVariants(
+    value.schema,
+    root,
+    ctx.runtime
+  )) {
+    if (variant.schema === true) {
+      kept.push(variant);
+      continue;
+    }
+    if (variant.schema === false) {
+      continue;
+    }
+    const decided = decide(variant);
+    if (decided) {
+      kept.push(decided);
+    }
+  }
+  const schema =
+    kept.length === 0
+      ? false
+      : createUnionSchema(
+          kept.map((variant) => variant.schema),
+          kept.map((variant) => variant.root),
+          kept.map((variant) => variant.references)
+        );
+  return { schema, root: kept[0]?.root ?? root, possible: schema !== false };
+}
+
+function filterNull(
+  value: Value,
+  wantNull: boolean,
+  ctx: SemanticContext
+): Narrowing {
+  return narrowVariants(value, ctx, (variant) => {
+    const types = getSchemaTypes(variant.schema, variant.root, ctx.runtime);
+    if (types.length === 0) {
+      return variant;
+    }
+    const hasNull = types.includes('null');
+    if (wantNull) {
+      return hasNull
+        ? {
+            schema: { type: 'null' },
+            root: variant.root,
+            references: variant.references,
+          }
+        : undefined;
+    }
+    const nonNullTypes = types.filter((type) => type !== 'null');
+    if (nonNullTypes.length === 0) {
+      return undefined;
+    }
+    if (!hasNull) {
+      return variant;
+    }
+    const object = schemaObject(variant.schema);
+    if (!object) {
+      return variant;
+    }
+    const narrowed = { ...object };
+    delete narrowed.nullable;
+    if (object.type !== undefined) {
+      narrowed.type = nonNullTypes as OpelPrimitive[];
+    }
+    if (Array.isArray(object.enum)) {
+      narrowed.enum = object.enum.filter((item) => item !== null);
+    }
+    return {
+      schema: narrowed as OpelSchema,
+      root: variant.root,
+      references: variant.references,
+    };
+  });
+}
+
+// OPEL compares parsed BigDecimals with scale-sensitive equals.
+function decimalLiteralParts(source: string): {
+  scale: number;
+  unscaled: string;
+} {
+  const minusSigns = source.match(/^-+/)?.[0].length ?? 0;
+  const negative = minusSigns % 2 === 1;
+  const unsigned = source.slice(minusSigns);
+  const point = unsigned.indexOf('.');
+  const scale = point < 0 ? 0 : unsigned.length - point - 1;
+  const digits = unsigned.replace('.', '').replace(/^0+(?=\d)/, '');
+  const normalized = digits || '0';
+  return {
+    scale,
+    unscaled:
+      normalized === '0' ? normalized : `${negative ? '-' : ''}${normalized}`,
+  };
+}
+
+function scalarComparison(
+  candidate: unknown,
+  other: unknown,
+  candidateNumericText?: string,
+  otherNumericText?: string
+): boolean | undefined {
+  if (candidate === null || other === null) {
+    return candidate === other;
+  }
+  if (typeof candidate === 'number' || typeof other === 'number') {
+    if (
+      typeof candidate !== 'number' ||
+      typeof other !== 'number' ||
+      candidateNumericText === undefined ||
+      otherNumericText === undefined
+    ) {
+      return undefined;
+    }
+    const left = decimalLiteralParts(candidateNumericText);
+    const right = decimalLiteralParts(otherNumericText);
+    return left.scale === right.scale && left.unscaled === right.unscaled;
+  }
+  const candidateType = valueType(candidate);
+  const otherType = valueType(other);
+  if (candidateType !== otherType) {
+    return undefined;
+  }
+  return literalEqual(candidate, other);
+}
+
+function schemaScalarValues(object: Record<string, unknown>): unknown[] | null {
+  if (object.const !== undefined) {
+    return [object.const];
+  }
+  return Array.isArray(object.enum) ? object.enum : null;
+}
+
+function propertyComparisonPossibilities(
+  schema: OpelSchema,
+  root: OpelSchema,
+  candidate: string | boolean,
+  ctx: SemanticContext
+): { equal: boolean; unequal: boolean } {
+  let equal = false;
+  let unequal = false;
+  let unknown = false;
+  for (const variant of resolveSchemaVariants(schema, root, ctx.runtime)) {
+    if (variant.schema === false) {
+      continue;
+    }
+    const object = schemaObject(variant.schema);
+    if (variant.schema === true || !object) {
+      unknown = true;
+      continue;
+    }
+    const values = schemaScalarValues(object);
+    if (!values) {
+      unknown = true;
+      continue;
+    }
+    for (const value of values) {
+      const comparison = scalarComparison(candidate, value);
+      if (comparison === true) {
+        equal = true;
+      } else if (comparison === false) {
+        unequal = true;
+      } else {
+        unknown = true;
+      }
+    }
+    if (
+      getSchemaTypes(variant.schema, variant.root, ctx.runtime).includes('null')
+    ) {
+      unequal = true;
+    }
+  }
+  return { equal: equal || unknown, unequal: unequal || unknown };
+}
+
+function filterDiscriminator(
+  value: Value,
+  property: string,
+  candidate: string | boolean,
+  wantEqual: boolean,
+  ctx: SemanticContext
+): Narrowing {
+  return narrowVariants(value, ctx, (variant) => {
+    const object = schemaObject(variant.schema);
+    if (!object) {
+      return variant;
+    }
+    const properties = isRecord(object.properties) ? object.properties : {};
+    const hasProperty = Object.prototype.hasOwnProperty.call(
+      properties,
+      property
+    );
+    const propertySchemas = [
+      ...(hasProperty ? [properties[property] as OpelSchema] : []),
+      ...matchingPatternProperties(object, property),
+    ];
+    if (
+      propertySchemas.length === 0 &&
+      object.additionalProperties &&
+      object.additionalProperties !== true
+    ) {
+      propertySchemas.push(object.additionalProperties as OpelSchema);
+    }
+    const propertySchema =
+      propertySchemas.length === 1
+        ? propertySchemas[0]
+        : propertySchemas.length > 1
+          ? combineSchemaValues(propertySchemas, variant.root, ctx.runtime)
+          : undefined;
+    const required = Array.isArray(object.required)
+      ? object.required.includes(property)
+      : false;
+    let possibilities =
+      propertySchema !== undefined
+        ? propertyComparisonPossibilities(
+            propertySchema,
+            schemaRootFor(propertySchema, variant.root),
+            candidate,
+            ctx
+          )
+        : object.additionalProperties === false
+          ? { equal: false, unequal: true }
+          : { equal: true, unequal: true };
+    if (!required) {
+      possibilities = { ...possibilities, unequal: true };
+    }
+    const possible = wantEqual ? possibilities.equal : possibilities.unequal;
+    return possible ? variant : undefined;
+  });
+}
+
+function narrowingsForValue(
+  env: Environment,
+  value: Value,
+  narrowing: Narrowing
+): PathNarrowings {
+  const narrowings = narrowingsInScope(env);
+  if (value.path && narrowing.possible) {
+    narrowings.set(stablePathKey(value.path), {
+      schema: narrowing.schema,
+      root: narrowing.root,
+    });
+  }
+  return narrowings;
+}
+
+// Pick the operand compared against null; with `null == null`, prefer the side with a path.
+function operandComparedWithNull(left: Value, right: Value): Value | null {
+  if (left.literal === null && right.literal === null) {
+    return left.path ? left : right;
+  }
+  if (left.literal === null) {
+    return right;
+  }
+  if (right.literal === null) {
+    return left;
+  }
+  return null;
+}
+
+// Pick the narrowing for each outcome by `equality` and build the condition.
+function narrowedCondition(
+  env: Environment,
+  value: Value,
+  equality: boolean,
+  equalNarrowing: Narrowing,
+  unequalNarrowing: Narrowing
+): ConditionResult {
+  const trueNarrowing = equality ? equalNarrowing : unequalNarrowing;
+  const falseNarrowing = equality ? unequalNarrowing : equalNarrowing;
+  return {
+    canBeTrue: trueNarrowing.possible,
+    canBeFalse: falseNarrowing.possible,
+    whenTrue: narrowingsForValue(env, value, trueNarrowing),
+    whenFalse: narrowingsForValue(env, value, falseNarrowing),
+  };
+}
+
+function comparisonCondition(
+  operator: string,
+  left: Value,
+  right: Value,
+  env: Environment,
+  ctx: SemanticContext
+): ConditionResult {
+  const base = narrowingsInScope(env);
+  const equality = operator === NODE.EqualityOp;
+  const checkedValue = operandComparedWithNull(left, right);
+  if (checkedValue) {
+    return narrowedCondition(
+      env,
+      checkedValue,
+      equality,
+      filterNull(checkedValue, true, ctx),
+      filterNull(checkedValue, false, ctx)
+    );
+  }
+
+  const pathValue = left.pathParent ? left : right;
+  const parent = pathValue.pathParent;
+  const candidate = (pathValue === left ? right : left).literal;
+  // Numeric schema values lose their source scale, so they cannot narrow safely.
+  if (
+    parent &&
+    (typeof candidate === 'string' || typeof candidate === 'boolean')
+  ) {
+    const segments = pathValue.path?.segments ?? [];
+    const property = segments[segments.length - 1];
+    if (property !== undefined) {
+      return narrowedCondition(
+        env,
+        parent,
+        equality,
+        filterDiscriminator(parent, property, candidate, true, ctx),
+        filterDiscriminator(parent, property, candidate, false, ctx)
+      );
+    }
+  }
+
+  if (left.literal !== undefined && right.literal !== undefined) {
+    const comparison = scalarComparison(
+      left.literal,
+      right.literal,
+      left.numericText,
+      right.numericText
+    );
+    if (comparison !== undefined) {
+      const result = equality ? comparison : !comparison;
+      return {
+        canBeTrue: result,
+        canBeFalse: !result,
+        whenTrue: base,
+        whenFalse: base,
+      };
+    }
+  }
+  return {
+    canBeTrue: true,
+    canBeFalse: true,
+    whenTrue: base,
+    whenFalse: base,
+  };
 }
 
 function analyzeFunctionCall(
@@ -311,7 +852,7 @@ function analyzeFunctionCall(
       `Unknown function "${name}".`,
       ctx.diagnostics
     );
-    return { schema: true, error: true };
+    return { schema: ANY_VALUE_SCHEMA, error: true };
   }
   const argNodes = node.getChild(NODE.Args)?.getChildren(NODE.Expression) ?? [];
   const args = argNodes.map((arg) => analyzeExpression(arg, env, ctx));
@@ -323,9 +864,9 @@ function analyzeFunctionCall(
         `Symbol "${name}" is not callable.`,
         ctx.diagnostics
       );
-      return { schema: true, error: true };
+      return { schema: ANY_VALUE_SCHEMA, error: true };
     }
-    return { schema: true };
+    return { schema: ANY_VALUE_SCHEMA };
   }
 
   return analyzeCall(value.callable, args, node, ctx, argNodes);
@@ -350,14 +891,17 @@ function analyzeLambda(
     ctx.source.slice(param.from, param.to)
   );
   const body = node.getChild(NODE.FunctionBody);
-  const localEnvironment = new Map(env);
+  const localEnvironment = cloneEnvironment(env);
   const bindings = paramNodes.map(
     (param, index): Binding => ({
       name: names[index],
       from: param.from,
       to: param.to,
       kind: 'lambda parameter',
-      value: { schema: true },
+      value: {
+        schema: ANY_VALUE_SCHEMA,
+        path: { root: `binding:${param.from}`, segments: [] },
+      },
       used: false,
     })
   );
@@ -366,13 +910,13 @@ function analyzeLambda(
   }
   const returnValue = body?.firstChild
     ? analyzeExpression(body.firstChild, localEnvironment, ctx)
-    : { schema: true };
+    : { schema: ANY_VALUE_SCHEMA };
   addUnusedBindingDiagnostics(bindings, ctx);
   return callableValue({
     signatures: [
       {
         parameters: names.map(
-          (name): OpelParameter => ({ name, schema: true })
+          (name): OpelParameter => ({ name, schema: ANY_VALUE_SCHEMA })
         ),
         returns: returnValue.schema,
       },
@@ -388,7 +932,7 @@ function analyzePostfixExpression(
   const primaries = node.getChildren(NODE.Primary);
   let value = primaries[0]
     ? analyzeExpression(primaries[0], env, ctx)
-    : { schema: true };
+    : { schema: ANY_VALUE_SCHEMA };
   for (const postfix of node.getChildren(NODE.Postfix)) {
     const method = postfix.getChild(NODE.MethodCall);
     const field = postfix.getChild(NODE.FieldAccess);
@@ -407,13 +951,15 @@ function analyzePostfixExpression(
           value,
           ctx.source.slice(dot.from, dot.to),
           field,
-          ctx
+          env,
+          ctx,
+          ctx.source.slice(dot.from, dot.to)
         );
       } else {
         const expression = field.getChild(NODE.Expression);
         const key = expression
           ? analyzeExpression(expression, env, ctx)
-          : { schema: true };
+          : { schema: ANY_VALUE_SCHEMA };
         const receiverRoot = schemaRootForValue(value);
         const receiverTypes = getSchemaTypes(
           value.schema,
@@ -455,7 +1001,7 @@ function analyzePostfixExpression(
                       root: schemaRootFor(items, resolution.root),
                     },
                   ]
-                : [{ schema: true as const, root: resolution.root }];
+                : [{ schema: ANY_VALUE_SCHEMA, root: resolution.root }];
             });
             const itemSchema = createUnionSchema(
               itemValues.map((item) => item.schema),
@@ -470,7 +1016,14 @@ function analyzePostfixExpression(
           key.literal !== undefined &&
           typeof key.literal === 'string'
         ) {
-          value = resolvePropertyAccess(value, key.literal, field, ctx);
+          value = resolvePropertyAccess(
+            value,
+            key.literal,
+            field,
+            env,
+            ctx,
+            expression ? staticStringKey(expression, ctx.source) : undefined
+          );
         } else if (
           receiverTypes.includes('object') &&
           schemaObject(value.schema)?.additionalProperties === false
@@ -482,9 +1035,9 @@ function analyzePostfixExpression(
             ctx.diagnostics
           );
         } else if (isImpossibleValue(value, ctx)) {
-          value = { schema: false, root: receiverRoot };
+          value = { schema: NO_VALUES_SCHEMA, root: receiverRoot };
         } else {
-          value = { schema: true };
+          value = { schema: ANY_VALUE_SCHEMA };
         }
       }
     } else if (group) {
@@ -499,9 +1052,9 @@ function analyzePostfixExpression(
             `This expression is not callable. Type '${valueDescription(value, ctx)}' has no call signatures.`,
             ctx.diagnostics
           );
-          value = { schema: true, error: true };
+          value = { schema: ANY_VALUE_SCHEMA, error: true };
         } else {
-          value = { schema: true };
+          value = { schema: ANY_VALUE_SCHEMA };
         }
       } else {
         value = analyzeCall(value.callable, args, group, ctx, argNodes);
@@ -561,6 +1114,7 @@ function analyzeAtom(
     return {
       schema: { type: valueType(value) as OpelPrimitive },
       literal: value,
+      numericText: ctx.source.slice(number.from, number.to),
     };
   }
   const string = node.getChild(NODE.StringLiteral);
@@ -581,7 +1135,7 @@ function analyzeAtom(
     const expression = parenthesized.getChild(NODE.Expression);
     return expression
       ? analyzeExpression(expression, env, ctx)
-      : { schema: true };
+      : { schema: ANY_VALUE_SCHEMA };
   }
   const functionCall = node.getChild(NODE.FunctionCall);
   if (functionCall) {
@@ -801,6 +1355,18 @@ function analyzeOperators(
   ctx: SemanticContext
 ): Value {
   const parts = expressionChildren(node);
+  if (
+    node.name === NODE.AndExpression &&
+    node.getChildren(NODE.LogicalAnd).length > 0
+  ) {
+    return analyzeLogicalOperator(parts, env, ctx, 'and');
+  }
+  if (
+    node.name === NODE.OrExpression &&
+    node.getChildren(NODE.LogicalOr).length > 0
+  ) {
+    return analyzeLogicalOperator(parts, env, ctx, 'or');
+  }
   if (parts.length > 0) {
     const values = parts.map((part) => analyzeExpression(part, env, ctx));
     const isBooleanExpression =
@@ -819,14 +1385,33 @@ function analyzeOperators(
           NODE.LessThanOrEqual,
         ].some((name) => node.getChildren(name).length > 0));
     if (isBooleanExpression) {
-      return { schema: { type: 'boolean' } };
+      const equalityOperators = [
+        ...node.getChildren(NODE.EqualityOp),
+        ...node.getChildren(NODE.InequalityOp),
+      ].sort((left, right) => left.from - right.from);
+      const condition =
+        node.name === NODE.EqualityExpression &&
+        equalityOperators.length === 1 &&
+        values.length === 2
+          ? comparisonCondition(
+              equalityOperators[0].name,
+              values[0],
+              values[1],
+              env,
+              ctx
+            )
+          : undefined;
+      return {
+        schema: { type: 'boolean' },
+        ...(condition ? { condition } : {}),
+      };
     }
     if (
       node.name === NODE.AdditiveExpression ||
       node.name === NODE.MultiplyExpression
     ) {
       if (validateArithmeticOperands(node, values, ctx)) {
-        return { schema: true, error: true };
+        return { schema: ANY_VALUE_SCHEMA, error: true };
       }
     }
     if (
@@ -855,7 +1440,38 @@ function analyzeOperators(
     }
     return values[values.length - 1];
   }
-  return { schema: true };
+  return { schema: ANY_VALUE_SCHEMA };
+}
+
+function analyzeLogicalOperator(
+  parts: SyntaxNode[],
+  env: Environment,
+  ctx: SemanticContext,
+  operator: 'and' | 'or'
+): Value {
+  const first = parts[0]
+    ? analyzeExpression(parts[0], env, ctx)
+    : { schema: ANY_VALUE_SCHEMA };
+  let condition = conditionFromValue(first, env);
+  for (const part of parts.slice(1)) {
+    const reachable =
+      operator === 'and' ? condition.canBeTrue : condition.canBeFalse;
+    if (!reachable) {
+      break;
+    }
+    const narrowings =
+      operator === 'and' ? condition.whenTrue : condition.whenFalse;
+    const childEnv = cloneEnvironment(env, narrowings);
+    const child = conditionFromValue(
+      analyzeExpression(part, childEnv, ctx),
+      childEnv
+    );
+    condition =
+      operator === 'and'
+        ? combineAnd(condition, child)
+        : combineOr(condition, child);
+  }
+  return { schema: { type: 'boolean' }, condition };
 }
 
 // Every pair of known union alternatives must accept the operator; unknown types stay permissive.
@@ -1243,6 +1859,34 @@ function readLiteralValue(
   return { hasLiteralValue: false };
 }
 
+function staticStringKey(node: SyntaxNode, source: string): string | undefined {
+  let current = node;
+  while (true) {
+    if (current.name === NODE.StringLiteral) {
+      const literal = readLiteralValue(current, source);
+      return typeof literal.value === 'string' ? literal.value : undefined;
+    }
+    if (current.name === NODE.ParenthesizedExpression) {
+      const expression = current.getChild(NODE.Expression);
+      if (expression) {
+        current = expression;
+        continue;
+      }
+    }
+    if (
+      EXPRESSION_NODES.has(current.name) &&
+      current.firstChild &&
+      current.lastChild &&
+      current.firstChild.from === current.lastChild.from &&
+      current.firstChild.to === current.lastChild.to
+    ) {
+      current = current.firstChild;
+      continue;
+    }
+    return undefined;
+  }
+}
+
 function expressionChildren(node: SyntaxNode): SyntaxNode[] {
   return [...EXPRESSION_NODES].flatMap((name) => node.getChildren(name));
 }
@@ -1270,7 +1914,7 @@ function addDeprecation(
 }
 
 function callableValue(callable: OpelCallable): Value {
-  return { schema: true, callable };
+  return { schema: ANY_VALUE_SCHEMA, callable };
 }
 
 function isKnownNonCallable(value: Value, ctx: SemanticContext): boolean {
@@ -1449,7 +2093,7 @@ function analyzeCall(
           ctx.diagnostics
         );
       }
-      return { schema: true, error: true };
+      return { schema: ANY_VALUE_SCHEMA, error: true };
     }
     if (signatures.length > 1) {
       addDiagnostic(
@@ -1462,7 +2106,7 @@ function analyzeCall(
   }
   const signature = signatures[0];
   if (!signature) {
-    return { schema: true };
+    return { schema: ANY_VALUE_SCHEMA };
   }
   addDeprecation(ctx, node, signature.deprecated ?? callable.deprecated);
   const resultSchema =
@@ -1516,7 +2160,7 @@ function resolveIdentifier(
       ctx.diagnostics
     );
   }
-  return { schema: true, error: true };
+  return { schema: ANY_VALUE_SCHEMA, error: true };
 }
 
 function namedMethodReceivers(
@@ -1626,14 +2270,14 @@ function analyzeMethodCall(
   argNodes: SyntaxNode[]
 ): Value {
   if (receiver.error) {
-    return { schema: true };
+    return { schema: ANY_VALUE_SCHEMA };
   }
   if (isImpossibleValue(receiver, ctx)) {
-    return { schema: false, root: schemaRootForValue(receiver) };
+    return { schema: NO_VALUES_SCHEMA, root: schemaRootForValue(receiver) };
   }
   const alternatives = resolveMethods(receiver, name, ctx);
   if (alternatives.length === 0) {
-    return { schema: true };
+    return { schema: ANY_VALUE_SCHEMA };
   }
   const complete = node.getChild(NODE.RParen) && !node.type.isError;
   // Receiver alternatives dispatch independently; they are not ordinary overloads.
@@ -1667,7 +2311,7 @@ function analyzeMethodCall(
       `Invalid method "${name}" on ${description}. Available methods: ${formatNames(availableMethods(receiver, ctx))}.`,
       ctx.diagnostics
     );
-    return { schema: true, error: true };
+    return { schema: ANY_VALUE_SCHEMA, error: true };
   }
   if (supported.length < alternatives.length) {
     addDiagnostic(
@@ -1705,7 +2349,7 @@ function analyzeMethodCall(
   }));
   if (supported.includes(undefined)) {
     // An unknown receiver alternative may return any schema, so keep that result in the join.
-    resultValues.push({ schema: true, root: receiver.schema });
+    resultValues.push({ schema: ANY_VALUE_SCHEMA, root: receiver.schema });
   }
   return {
     schema: createUnionSchema(
@@ -1720,13 +2364,25 @@ function resolvePropertyAccess(
   receiver: Value,
   name: string,
   node: SyntaxNode,
-  ctx: SemanticContext
+  env: Environment,
+  ctx: SemanticContext,
+  stableName?: string
 ): Value {
   if (receiver.error || receiver.schema === true) {
-    return { schema: true };
+    return withPropertyPath(
+      receiver,
+      { schema: ANY_VALUE_SCHEMA },
+      stableName,
+      env
+    );
   }
   if (isImpossibleValue(receiver, ctx)) {
-    return { schema: false, root: schemaRootForValue(receiver) };
+    return withPropertyPath(
+      receiver,
+      { schema: NO_VALUES_SCHEMA, root: schemaRootForValue(receiver) },
+      stableName,
+      env
+    );
   }
   const supports: Value[] = [];
   let hasExplicitSupport = false;
@@ -1800,7 +2456,7 @@ function resolvePropertyAccess(
         isRecord(object.patternProperties) ||
         object.additionalProperties !== undefined;
       if (!hasPropertyRules) {
-        supports.push({ schema: true, root: resolution.root });
+        supports.push({ schema: ANY_VALUE_SCHEMA, root: resolution.root });
       } else {
         if (object.additionalProperties === undefined) {
           unsupported++;
@@ -1819,7 +2475,7 @@ function resolvePropertyAccess(
     }
   }
   if (hasUnknownVariant) {
-    return { schema: true };
+    return { schema: ANY_VALUE_SCHEMA };
   }
   if (unsupported > 0) {
     const schemaName = schemaDisplayName(receiver.schema, ctx.runtime);
@@ -1840,14 +2496,46 @@ function resolvePropertyAccess(
     );
   }
   const callable = supports.length === 1 ? supports[0].callable : undefined;
-  return {
-    schema: createUnionSchema(
-      supports.map((value) => value.schema),
-      supports.map((value) => schemaRootForValue(value))
-    ),
-    root: supports[0]?.root ?? receiverRoot,
-    ...(callable ? { callable } : {}),
-  };
+  return withPropertyPath(
+    receiver,
+    {
+      schema: createUnionSchema(
+        supports.map((value) => value.schema),
+        supports.map((value) => schemaRootForValue(value))
+      ),
+      root: supports[0]?.root ?? receiverRoot,
+      ...(callable ? { callable } : {}),
+    },
+    stableName,
+    env
+  );
+}
+
+function withPropertyPath(
+  receiver: Value,
+  property: Value,
+  name: string | undefined,
+  env: Environment
+): Value {
+  if (name === undefined || !receiver.path) {
+    return property;
+  }
+  return applyPathNarrowing(env, {
+    ...property,
+    path: {
+      root: receiver.path.root,
+      segments: [...receiver.path.segments, name],
+    },
+    pathParent: receiver,
+  });
+}
+
+function applyPathNarrowing(env: Environment, value: Value): Value {
+  if (!value.path) {
+    return value;
+  }
+  const narrowing = environmentNarrowings(env).get(stablePathKey(value.path));
+  return narrowing ? { ...value, ...narrowing } : value;
 }
 
 // Local shadowing applies equally to bare calls and identifier expressions.
@@ -1859,12 +2547,17 @@ function lookupIdentifier(
   const localBinding = env.get(name);
   if (localBinding) {
     localBinding.used = true;
-    return localBinding.value;
+    const value = applyPathNarrowing(env, localBinding.value);
+    return value;
   }
   const globals = ctx.runtime.globals;
   if (globals && Object.prototype.hasOwnProperty.call(globals, name)) {
     const schema = globals[name];
-    return { schema, root: schema };
+    return applyPathNarrowing(env, {
+      schema,
+      root: schema,
+      path: { root: `global:${name}`, segments: [] },
+    });
   }
   const functions = ctx.runtime.functions;
   return functions && Object.prototype.hasOwnProperty.call(functions, name)
